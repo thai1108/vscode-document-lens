@@ -1,5 +1,6 @@
-// Runs inside a real VS Code extension host (pnpm test:vscode): every format opens in its Document Lens editor by
-// default, and files are read through VS Code's file system with the size cap and preflight check applied.
+// Runs inside a real VS Code extension host (pnpm test:vscode runs every test/vscode/*.suite.ts): every format opens
+// in its Document Lens editor by default, and files are read through VS Code's file system with the size cap and
+// preflight check applied.
 import assert from 'node:assert/strict';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
