@@ -30,6 +30,8 @@ export interface ViewerContext {
   showError(message: string): void;
   /** Asks the host to open an http(s) URL in the browser; anything else is ignored. */
   openLink(url: string): void;
+  /** Asks the host to reopen the file in VS Code's text editor; the host does so only for text formats. */
+  openAsText(): void;
 }
 
 export interface Viewer {
@@ -117,6 +119,9 @@ export function startViewer(viewer: Viewer, api: VsCodeApi = connectToHost()): S
       if (external) {
         api.postMessage({ type: 'openLink', url: external });
       }
+    },
+    openAsText() {
+      api.postMessage({ type: 'openAsText' });
     },
   };
 

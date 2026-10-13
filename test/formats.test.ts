@@ -44,6 +44,8 @@ describe('format registry', () => {
     assert.equal(formatForFile('a.docx')?.id, 'docx');
     assert.equal(formatForFile('a.doc')?.id, 'doc');
     assert.equal(formatForFile('a.pptx')?.id, 'pptx');
+    assert.equal(formatForFile('Export.CSV')?.id, 'csv');
+    assert.equal(formatForFile('a.tsv')?.id, 'tsv');
     assert.equal(formatForFile('a.txt'), undefined);
   });
 
@@ -57,10 +59,11 @@ describe('format registry', () => {
     }
     for (const sample of samples) {
       const bytes = sample.build();
-      const sameFamily = (id: string) => ['doc', 'xls', 'ppt'].includes(id);
+      // The compound file stubs are indistinguishable by signature alone, and so is a .csv from a .tsv.
+      const families = [['doc', 'xls', 'ppt'], ['csv', 'tsv']];
+      const sameFamily = (a: string, b: string) => families.some((family) => family.includes(a) && family.includes(b));
       for (const format of FORMATS.filter((candidate) => candidate !== formatForFile(sample.fileName))) {
-        // The compound file stubs are indistinguishable by signature alone.
-        if (sameFamily(format.id) && sameFamily(formatForFile(sample.fileName)?.id ?? '')) {
+        if (sameFamily(format.id, formatForFile(sample.fileName)?.id ?? '')) {
           continue;
         }
         assert.throws(() => format.check(bytes), `${sample.fileName} is not a ${format.id}`);

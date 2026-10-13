@@ -14,6 +14,8 @@ export interface FormatDefinition {
   readonly csp?: Readonly<Partial<Record<CspDirective, readonly string[]>>>;
   /** VS Code's find widget (Cmd/Ctrl+F) over the webview's text; leave off when the viewer has its own search. */
   readonly findWidget?: boolean;
+  /** A text format: the viewer may ask to reopen the file in VS Code's text editor. */
+  readonly text?: boolean;
   /** Structural check of the file before it reaches the webview; throws an Error with a message for the user. */
   check(bytes: Uint8Array): void;
 }

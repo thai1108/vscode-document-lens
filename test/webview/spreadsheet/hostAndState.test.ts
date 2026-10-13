@@ -32,11 +32,13 @@ describe('saved viewer state', () => {
       sheet: 'Data',
       positions: { Data: { top: 120, left: 0, row: 4, col: 2 }, Other: { top: 5, left: 6 } },
     });
+    assert.deepEqual(readSavedState({ headerRow: false }), { headerRow: false });
   });
 
   it('drops anything else', () => {
     assert.deepEqual(readSavedState(undefined), {});
     assert.deepEqual(readSavedState('Data'), {});
+    assert.deepEqual(readSavedState({ headerRow: 'no' }), {});
     assert.deepEqual(readSavedState({ sheet: 3, positions: { A: null, B: { top: 'x', left: 1 }, C: { top: -5, left: Infinity }, D: { top: -5, left: 2, row: 1.5, col: 1 } } }), {
       positions: { D: { top: 0, left: 2 } },
     });

@@ -4,8 +4,9 @@ import { externalUrl, MESSAGE_LIMITS, parseWebviewMessage } from '../src/protoco
 import { receivedFromWebview } from './support/vscodeWebviewSerializer.ts';
 
 describe('parseWebviewMessage', () => {
-  it('accepts ready and http(s) links as the host receives them', () => {
+  it('accepts ready, open as text and http(s) links as the host receives them', () => {
     assert.deepEqual(parseWebviewMessage(receivedFromWebview({ type: 'ready' })), { type: 'ready' });
+    assert.deepEqual(parseWebviewMessage(receivedFromWebview({ type: 'openAsText', url: 'file:///etc/passwd' })), { type: 'openAsText' });
     assert.deepEqual(parseWebviewMessage(receivedFromWebview({ type: 'openLink', url: 'https://example.com/a b?q=1#x' })), {
       type: 'openLink',
       url: 'https://example.com/a%20b?q=1#x',

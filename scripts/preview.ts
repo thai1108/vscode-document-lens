@@ -80,6 +80,9 @@ window.acquireVsCodeApi = () => ({
     } else if (received.type === 'openLink') {
       window.previewLinks.push(received.url);
       console.log('[openLink]', received.url);
+    } else if (received.type === 'openAsText') {
+      window.previewOpenedAsText = (window.previewOpenedAsText ?? 0) + 1;
+      console.log('[openAsText]');
     }
   },
   getState: () => JSON.parse(sessionStorage.getItem('document-lens-state') || 'null') ?? undefined,

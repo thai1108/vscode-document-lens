@@ -12,7 +12,9 @@ export type HostMessage =
 export type WebviewMessage =
   | { type: 'ready' }
   /** A link the user clicked in the document; opened only if it is http(s). */
-  | { type: 'openLink'; url: string };
+  | { type: 'openLink'; url: string }
+  /** Reopen the file in VS Code's text editor (formats that are text, e.g. .csv). */
+  | { type: 'openAsText' };
 
 export const MESSAGE_LIMITS = {
   urlLength: 8192,
@@ -27,6 +29,8 @@ export function parseWebviewMessage(raw: unknown): WebviewMessage | null {
   switch (message['type']) {
     case 'ready':
       return { type: 'ready' };
+    case 'openAsText':
+      return { type: 'openAsText' };
     case 'openLink': {
       const url = externalUrl(message['url']);
       return url ? { type: 'openLink', url } : null;

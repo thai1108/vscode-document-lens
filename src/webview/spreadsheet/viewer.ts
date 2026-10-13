@@ -1,9 +1,10 @@
-// The spreadsheet viewer (.xlsx and .xls): reads the workbook, shows one sheet at a time with tabs to switch, and
-// remembers the sheet, scroll position and selected cell in the webview state.
+// The spreadsheet viewer (.xlsx, .xls, .csv and .tsv): reads the workbook, shows one sheet at a time with tabs to
+// switch, and remembers the sheet, scroll position and selected cell in the webview state.
 import type { LoadedDocument, Viewer, ViewerContext } from '../shell/app.ts';
+import { openCsv } from './csv/workbook.ts';
 import { parseCellRef } from './model/address.ts';
 import type { Sheet, Workbook } from './model/types.ts';
-import { CellBar, SheetTabs } from './view/chrome.ts';
+import { CellBar, CsvBar, SheetTabs } from './view/chrome.ts';
 import { Grid, type GridHost, type GridPosition } from './view/grid.ts';
 import { StyleRules } from './view/styleRules.ts';
 import { openXls } from './xls/workbook.ts';
@@ -19,36 +20,66 @@ const SCOPE = 'dl-sheet';
 export interface SavedState {
   sheet?: string;
   positions?: Record<string, GridPosition>;
+  /** .csv/.tsv: the header row switch, once the user has set it. */
+  headerRow?: boolean;
 }
 
 export function spreadsheetViewer(): Viewer {
   let session: Session | undefined;
-  return {
-    async render(document: LoadedDocument, context: ViewerContext) {
-      const previous = session;
-      const state = previous?.state() ?? readSavedState(context.viewerState());
+  let shown: LoadedDocument | undefined;
+  let queue = Promise.resolve();
+
+  const show = async (document: LoadedDocument, context: ViewerContext, state: SavedState) => {
+    const previous = session;
+    if (!previous) {
+      context.content.replaceChildren(message(context.content.ownerDocument, 'Loading…'));
+    }
+    let next: Session | undefined;
+    try {
+      const actions: SessionActions = {
+        toggleHeaderRow: () => {
+          queue = queue.then(async () => {
+            if (session && shown) {
+              const headerRow = !session.workbook.csv?.headerRow;
+              await show(shown, context, { ...session.state(), headerRow }).catch((error: Error) => context.showError(error.message));
+            }
+          });
+        },
+      };
+      next = new Session(await openDocument(document, state), context, state, context.zoom(), actions);
+      await next.start();
+    } catch (error) {
+      next?.dispose();
       if (!previous) {
-        context.content.replaceChildren(message(context.content.ownerDocument, 'Loading…'));
+        context.content.replaceChildren();
       }
-      let next: Session | undefined;
-      try {
-        next = new Session(await openWorkbook(document.data), context, state, context.zoom());
-        await next.start();
-      } catch (error) {
-        next?.dispose();
-        if (!previous) {
-          context.content.replaceChildren();
-        }
-        throw error;
-      }
-      // A reloaded file replaces the previous one only once it is ready.
-      previous?.dispose();
-      session = next;
+      throw error;
+    }
+    // A reloaded file replaces the previous one only once it is ready.
+    previous?.dispose();
+    session = next;
+    shown = document;
+  };
+
+  return {
+    render(document: LoadedDocument, context: ViewerContext) {
+      const run = queue.then(() => show(document, context, session?.state() ?? readSavedState(context.viewerState())));
+      queue = run.catch(() => undefined);
+      return run;
     },
     applyZoom(zoom: number) {
       session?.setZoom(zoom);
     },
   };
+}
+
+/** The workbook of a document: .csv and .tsv by their format, spreadsheets by their file signature. */
+export function openDocument(document: LoadedDocument, state: SavedState = {}): Promise<Workbook> {
+  if (document.format === 'csv' || document.format === 'tsv') {
+    const options = { tabSeparated: document.format === 'tsv', ...(state.headerRow === undefined ? {} : { headerRow: state.headerRow }) };
+    return Promise.resolve(openCsv(document.data, document.fileName, options));
+  }
+  return openWorkbook(document.data);
 }
 
 export async function openWorkbook(bytes: Uint8Array): Promise<Workbook> {
@@ -61,13 +92,20 @@ export async function openWorkbook(bytes: Uint8Array): Promise<Workbook> {
   throw new Error('Not a spreadsheet file');
 }
 
+interface SessionActions {
+  toggleHeaderRow(): void;
+}
+
 class Session {
-  private readonly workbook: Workbook;
+  readonly workbook: Workbook;
   private readonly context: ViewerContext;
+  private readonly actions: SessionActions;
+  private readonly headerRow: boolean | undefined;
   private readonly root: HTMLElement;
   private readonly gridHost: HTMLElement;
   private readonly tabs: SheetTabs;
   private readonly cellBar: CellBar;
+  private csvBar: CsvBar | undefined;
   private readonly rules: StyleRules;
   private readonly cache = new Map<number, Sheet>();
   private readonly positions = new Map<string, GridPosition>();
@@ -80,9 +118,11 @@ class Session {
   private saveTimer: ReturnType<typeof setTimeout> | undefined;
   private disposed = false;
 
-  constructor(workbook: Workbook, context: ViewerContext, state: SavedState, zoom: number) {
+  constructor(workbook: Workbook, context: ViewerContext, state: SavedState, zoom: number, actions: SessionActions) {
     this.workbook = workbook;
     this.context = context;
+    this.actions = actions;
+    this.headerRow = state.headerRow;
     this.zoom = zoom;
     this.initialSheet = state.sheet;
     for (const [name, position] of Object.entries(state.positions ?? {})) {
@@ -95,6 +135,8 @@ class Session {
     this.gridHost = document.createElement('div');
     this.gridHost.className = 'dl-grid-host';
     this.tabs = new SheetTabs(document, workbook.sheets, (index) => void this.show(index));
+    // A text file has a single sheet, named after the file shown in the toolbar already.
+    this.tabs.element.hidden = Boolean(workbook.csv);
     this.root.append(this.gridHost, this.tabs.element);
     this.cellBar = new CellBar(document);
     document.addEventListener('copy', this.onCopy);
@@ -111,7 +153,9 @@ class Session {
     this.keep(index, sheet);
     this.mount(index, sheet);
     this.context.content.replaceChildren(this.root);
-    this.context.tools.replaceChildren(this.cellBar.element);
+    const csv = this.workbook.csv;
+    this.csvBar = csv && new CsvBar(this.root.ownerDocument, csv, { toggleHeaderRow: () => this.actions.toggleHeaderRow(), openAsText: () => this.context.openAsText() });
+    this.context.tools.replaceChildren(this.cellBar.element, ...(this.csvBar ? [this.csvBar.element] : []));
     this.activate();
   }
 
@@ -157,6 +201,9 @@ class Session {
     if (this.sheet) {
       state.sheet = this.sheet.name;
     }
+    if (this.headerRow !== undefined) {
+      state.headerRow = this.headerRow;
+    }
     return state;
   }
 
@@ -168,6 +215,7 @@ class Session {
     this.rules.dispose();
     this.root.ownerDocument.removeEventListener('copy', this.onCopy);
     this.cellBar.element.remove();
+    this.csvBar?.element.remove();
     this.root.remove();
   }
 
@@ -300,6 +348,9 @@ export function readSavedState(raw: unknown): SavedState {
   const state: SavedState = {};
   if (typeof value['sheet'] === 'string') {
     state.sheet = value['sheet'];
+  }
+  if (typeof value['headerRow'] === 'boolean') {
+    state.headerRow = value['headerRow'];
   }
   const positions = value['positions'];
   if (typeof positions === 'object' && positions !== null) {
