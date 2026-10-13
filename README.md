@@ -4,18 +4,16 @@ Preview documents inside VS Code without leaving the editor: `.pdf`, `.docx`, `.
 `.ppt` files open read-only in a viewer tab. Everything happens locally — nothing is uploaded, no other application
 is needed.
 
-> Work in progress: the shared frame is in place and the format viewers are being built one by one (see the table).
-
 ## Formats
 
-| Extension | Viewer | Status |
-| --- | --- | --- |
-| `.pdf` | Pages with selectable text, page navigation, zoom, fit width, find | Planned |
-| `.docx` | The document laid out as pages, with images, tables and links | Planned |
-| `.doc` | Simplified preview: the document's text | Planned |
-| `.xlsx`, `.xls` | Grid with sheet tabs, merged cells, column widths, frozen panes, basic styles | Planned |
-| `.pptx` | Slide list and slide view with text, pictures, shapes and tables | Planned |
-| `.ppt` | Simplified preview: each slide's text and pictures | Planned |
+| Extension | Viewer |
+| --- | --- |
+| `.pdf` | Pages with selectable text, page navigation, zoom, fit width, find (Japanese and other CJK text included), outline and links |
+| `.docx` | The document laid out as pages with headers, footers, footnotes, pictures, tables, lists and embedded fonts; in-document links, fit width, find |
+| `.doc` | Simplified preview: the document's text with tables, links, footnotes, comments, headers and footers |
+| `.xlsx`, `.xls` | Grid with sheet tabs, merged cells, column widths and row heights, frozen panes, cell formats (fills, fonts, borders, number and date formats) and links; large sheets scroll smoothly. Pictures and charts are not shown |
+| `.pptx` | Slide list and slide view with text, pictures, shapes and tables in their theme colors and master/layout styles; charts, embedded objects and media as labelled placeholders |
+| `.ppt` | Simplified preview: each slide's title, text and pictures, hidden slides marked |
 
 Every viewer shares the same frame:
 
@@ -100,6 +98,11 @@ own bundle. Messages from the webview are validated in `src/protocol.ts`.
    tag matches `package.json`, runs `pnpm check` and `pnpm package`, and creates a GitHub Release with the `.vsix`
    attached and the CHANGELOG section as notes.
 3. Download the `.vsix` from the release and upload it to the Marketplace by hand.
+
+## Third-party software
+
+The viewers bundle pdf.js, docx-preview, JSZip, pako and SheetJS Community Edition. Their license texts ship next to
+the viewer bundles in the extension (`dist/webview-*.licenses.txt` / `.LICENSES.txt`).
 
 ## Trademarks
 
