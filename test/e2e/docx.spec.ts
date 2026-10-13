@@ -345,10 +345,16 @@ test.describe('.docx viewer', () => {
 
   test('archives JSZip would read differently from the checks are refused', async ({ page }) => {
 
-    const refusal = (detail: string) => `Could not display tampered.docx: the file is damaged or uses ZIP features Document Lens does not read (${detail})`;
+    // The host's preflight (src/zip.ts) refuses most of these before the webview sees them; either refusal is fine.
+    const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const refusal = (detail: string, host?: string) =>
+      new RegExp(
+        `^(${escape(`Could not display tampered.docx: the file is damaged or uses ZIP features Document Lens does not read (${detail})`)}` +
+          `${host ? `|${escape(`Not a valid .docx file: ${host}`)}` : ''})$`,
+      );
     // A well-formed document part, and a malformed one JSZip would put under the same name.
     const decoy = wordPackage({ body: paragraph(run('text')), extraEntries: [{ name: 'x/../word/document.xml', data: '<w:document><not-closed></w:document>' }] });
-    await expectRefused(page, 'tampered.docx', decoy, refusal('unusual entry name "x/../word/document.xml"'));
+    await expectRefused(page, 'tampered.docx', decoy, refusal('unusual entry name "x/../word/document.xml"', 'ZIP entry name is not canonical: x/../word/document.xml'));
     // A harmless archive in front of the real one, with the same entries: JSZip skips to the real one (whose picture
     // inflates far past its declared size), a reader that trusts the end record's offset stays on the decoy.
     const harmless = wordPackage({ body: paragraph(run('text')), extraEntries: [{ name: 'word/media/forged.png', data: 'x' }] });
@@ -356,7 +362,7 @@ test.describe('.docx viewer', () => {
       body: paragraph(run(Array.from({ length: 5000 }, (_, i) => i).join(','))),
       extraEntries: [{ name: 'word/media/forged.png', data: Buffer.alloc(1_000_000), declaredSize: 100 }],
     });
-    await expectRefused(page, 'tampered.docx', prependedDecoy(harmless, real), refusal('unexpected data around the ZIP central directory'));
+    await expectRefused(page, 'tampered.docx', prependedDecoy(harmless, real), refusal('unexpected data around the ZIP central directory', 'Corrupt ZIP archive (the central directory is not where the end record says)'));
     // Chrome's inflater stops at bytes after the end of a deflate stream (pako, in JSZip, ignores them).
     const junk = markDeflated(wordPackage({ body: paragraph(run('text')), extraEntries: [junkDeflateEntry('word/media/image1.png', 8 * 1024 * 1024)] }), 'word/media/image1.png');
     await expectRefused(page, 'tampered.docx', junk, refusal('word/media/image1.png cannot be inflated'));
