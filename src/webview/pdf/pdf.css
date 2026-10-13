@@ -1,0 +1,567 @@
+/* The PDF viewer: layout and controls, then the rules pdf.js's page, text and annotation layers rely on. Those are
+ * adapted from pdfjs-dist/web/pdf_viewer.css (Copyright 2014 Mozilla Foundation, Apache License 2.0), keeping only
+ * what this viewer uses; the CSS variables in them are set by pdf.js through the CSSOM. */
+
+/* --- Layout ------------------------------------------------------------------------------------------------------ */
+
+.pdf-layout {
+  --pdf-gutter: 12px; /* PAGE_GUTTER in viewer.ts */
+  --pdf-outline-width: min(260px, 40%);
+  position: absolute;
+  inset: 0;
+}
+
+/* pdf.js's viewer requires an absolutely positioned scroll container. */
+.pdf-scroller {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  outline: none;
+}
+
+.pdf-layout.with-outline .pdf-scroller {
+  left: var(--pdf-outline-width);
+}
+
+.pdf-outline {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: var(--pdf-outline-width);
+  overflow: auto;
+  padding: 4px 0;
+  background: var(--dl-panel);
+  border-right: 1px solid var(--dl-border);
+}
+
+.pdf-outline-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pdf-outline-item {
+  display: block;
+  width: 100%;
+  padding: 3px 8px 3px calc(10px + var(--depth, 0) * 14px);
+  overflow: hidden;
+  background: none;
+  border: none;
+  color: var(--dl-fg);
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.pdf-outline-item:hover {
+  background: var(--dl-hover);
+}
+
+.pdf-outline-item:focus-visible {
+  outline: 1px solid var(--dl-focus);
+  outline-offset: -1px;
+}
+
+/* --- Toolbar controls -------------------------------------------------------------------------------------------- */
+
+.pdf-tool-group,
+.pdf-find-bar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.pdf-separator {
+  flex: none;
+  width: 1px;
+  height: 16px;
+  margin: 0 6px;
+  background: var(--dl-border);
+}
+
+.pdf-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.pdf-icon-button svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.pdf-icon-button[aria-pressed='true'] {
+  background: var(--vscode-inputOption-activeBackground, rgba(0, 127, 212, 0.4));
+  border-color: var(--vscode-inputOption-activeBorder, #007acc);
+}
+
+.pdf-input {
+  height: 22px;
+  padding: 0 5px;
+  background: var(--dl-input);
+  border: 1px solid var(--dl-input-border);
+  border-radius: 2px;
+  color: var(--vscode-input-foreground, inherit);
+}
+
+.pdf-input:focus {
+  outline: 1px solid var(--dl-focus);
+  outline-offset: -1px;
+}
+
+.pdf-input::placeholder {
+  color: var(--vscode-input-placeholderForeground, var(--dl-dim));
+}
+
+.pdf-page-input {
+  margin-left: 2px;
+  text-align: right;
+}
+
+.pdf-page-input:disabled {
+  opacity: 0.5;
+}
+
+.pdf-page-count {
+  margin: 0 2px 0 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+.pdf-find-input {
+  width: 180px;
+  min-width: 80px;
+}
+
+.pdf-find-count {
+  min-width: 72px;
+  padding: 0 4px;
+  color: var(--dl-dim);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.pdf-find-count.no-results {
+  color: var(--vscode-errorForeground, #f48771);
+}
+
+/* --- Pages ------------------------------------------------------------------------------------------------------- */
+
+.pdfViewer {
+  --scale-factor: 1;
+  --page-bg-color: unset;
+  --hcm-highlight-filter: none;
+  --hcm-highlight-selected-filter: none;
+  /* As wide as the widest page, so a zoomed-in page keeps its gutter on both sides. */
+  width: max-content;
+  min-width: 100%;
+  padding: var(--pdf-gutter);
+}
+
+.pdfViewer .page {
+  --user-unit: 1;
+  --total-scale-factor: calc(var(--scale-factor) * var(--user-unit));
+  --scale-round-x: 1px;
+  --scale-round-y: 1px;
+  position: relative;
+  width: 816px;
+  height: 1056px;
+  margin: 0 auto var(--pdf-gutter);
+  overflow: visible;
+  direction: ltr;
+  /* Paper stays white in every theme. */
+  background-color: var(--page-bg-color, rgb(255 255 255));
+  box-shadow:
+    0 0 0 1px rgb(0 0 0 / 0.06),
+    0 1px 4px rgb(0 0 0 / 0.3);
+}
+
+.pdfViewer .page:last-child {
+  margin-bottom: 0;
+}
+
+.pdfViewer .canvasWrapper {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+.pdfViewer .canvasWrapper canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  contain: content;
+}
+
+.pdfViewer .canvasWrapper canvas .structTree {
+  contain: strict;
+}
+
+.pdfViewer .canvasWrapper canvas.detailView {
+  image-rendering: pixelated;
+}
+
+.pdfViewer [data-main-rotation='90'] {
+  transform: rotate(90deg) translateY(-100%);
+}
+
+.pdfViewer [data-main-rotation='180'] {
+  transform: rotate(180deg) translate(-100%, -100%);
+}
+
+.pdfViewer [data-main-rotation='270'] {
+  transform: rotate(270deg) translateX(-100%);
+}
+
+/* --- Text layer: transparent text over the canvas, for selection and find ----------------------------------------- */
+
+.textLayer {
+  --min-font-size: 1;
+  --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+  --min-font-size-inv: calc(1 / var(--min-font-size));
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: clip;
+  color-scheme: only light;
+  line-height: 1;
+  text-align: initial;
+  letter-spacing: normal;
+  word-spacing: normal;
+  text-size-adjust: none;
+  forced-color-adjust: none;
+  transform-origin: 0 0;
+  caret-color: CanvasText;
+  opacity: 1;
+}
+
+.textLayer.highlighting {
+  touch-action: none;
+}
+
+.textLayer :is(span, br) {
+  position: absolute;
+  color: transparent;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0% 0%;
+  user-select: text;
+}
+
+.textLayer > :not(.markedContent),
+.textLayer .markedContent span:not(.markedContent) {
+  --font-height: 0;
+  --scale-x: 1;
+  --rotate: 0deg;
+  z-index: 1;
+  font-size: calc(var(--text-scale-factor) * var(--font-height));
+  transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
+}
+
+.textLayer .markedContent {
+  display: contents;
+}
+
+.textLayer span[role='img'] {
+  cursor: default;
+  user-select: none;
+}
+
+.textLayer .highlight {
+  margin: -1px;
+  padding: 1px;
+  background-color: rgb(255 200 0 / 0.4);
+  border-radius: 4px;
+}
+
+.textLayer .highlight.appended {
+  position: initial;
+}
+
+.textLayer .highlight.begin {
+  border-radius: 4px 0 0 4px;
+}
+
+.textLayer .highlight.end {
+  border-radius: 0 4px 4px 0;
+}
+
+.textLayer .highlight.middle {
+  border-radius: 0;
+}
+
+.textLayer .highlight.selected {
+  background-color: rgb(255 110 0 / 0.55);
+  scroll-margin-top: 50px;
+}
+
+.textLayer ::selection {
+  background: rgb(0 90 255 / 0.25);
+  background: color-mix(in srgb, AccentColor, transparent 50%);
+  color: transparent;
+}
+
+.textLayer br::selection {
+  background: transparent;
+}
+
+.textLayer .endOfContent {
+  position: absolute;
+  inset: 100% 0 0;
+  z-index: 0;
+  display: block;
+  cursor: default;
+  user-select: none;
+}
+
+.textLayer.selecting .endOfContent {
+  top: 0;
+}
+
+@media screen and (forced-colors: active) {
+  .textLayer .highlight,
+  .textLayer .highlight.selected {
+    background-color: transparent;
+    outline: 1px solid Highlight;
+  }
+}
+
+/* --- Annotation layer: links, notes and their pop-ups ------------------------------------------------------------ */
+
+.annotationLayer {
+  --link-outline: none;
+  position: absolute;
+  top: 0;
+  left: 0;
+  color-scheme: only light;
+  pointer-events: none;
+  transform-origin: 0 0;
+}
+
+.annotationLayer[data-main-rotation='90'] .norotate {
+  transform: rotate(270deg) translateX(-100%);
+}
+
+.annotationLayer[data-main-rotation='180'] .norotate {
+  transform: rotate(180deg) translate(-100%, -100%);
+}
+
+.annotationLayer[data-main-rotation='270'] .norotate {
+  transform: rotate(90deg) translateY(-100%);
+}
+
+.annotationLayer.disabled :is(section, .popup) {
+  pointer-events: none;
+}
+
+.annotationLayer .annotationContent {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.annotationLayer .annotationContent.freetext {
+  inset: 0;
+  overflow: visible;
+  background: transparent;
+  border: none;
+  font: 10px sans-serif;
+  line-height: 1.35;
+  white-space: nowrap;
+}
+
+.annotationLayer section {
+  position: absolute;
+  box-sizing: border-box;
+  text-align: initial;
+  pointer-events: auto;
+  transform-origin: 0 0;
+  user-select: none;
+}
+
+.annotationLayer section:has(div.annotationContent) canvas.annotationContent {
+  display: none;
+}
+
+.annotationLayer section .overlaidText {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: inline-block;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+}
+
+.annotationLayer section svg {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.textLayer.selecting ~ .annotationLayer section {
+  pointer-events: none;
+}
+
+.annotationLayer .linkAnnotation {
+  outline: var(--link-outline);
+}
+
+.annotationLayer :is(.linkAnnotation, .buttonWidgetAnnotation.pushButton) > a {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  font-size: 1em;
+}
+
+.annotationLayer :is(.linkAnnotation, .buttonWidgetAnnotation.pushButton):not(.hasBorder) > a:hover {
+  background-color: rgb(255 255 0);
+  opacity: 0.2;
+}
+
+.annotationLayer .linkAnnotation.hasBorder:hover {
+  background-color: rgb(255 255 0 / 0.2);
+}
+
+.annotationLayer .hasBorder {
+  background-size: 100% 100%;
+}
+
+.annotationLayer .textAnnotation img {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  cursor: pointer;
+}
+
+/* A note drawn by its own appearance stream (pdf.js names it NoIcon) needs no icon on top. */
+.annotationLayer .textAnnotation img[src$='#annotation-noicon.svg'] {
+  visibility: hidden;
+}
+
+/* Embedded audio and video are not played: the player would need media-src in the CSP. */
+.annotationLayer .mediaAnnotation {
+  display: none;
+}
+
+.annotationLayer .fileAttachmentAnnotation .popupTriggerArea {
+  width: 100%;
+  height: 100%;
+}
+
+.annotationLayer .popupTriggerArea {
+  cursor: pointer;
+}
+
+.annotationLayer .popupAnnotation {
+  position: absolute;
+  width: max-content;
+  max-width: 45%;
+  height: auto;
+  font-size: calc(9px * var(--total-scale-factor));
+  pointer-events: none;
+}
+
+.annotationLayer .popup {
+  padding: calc(6px * var(--total-scale-factor));
+  background-color: rgb(255 255 153);
+  border-radius: calc(2px * var(--total-scale-factor));
+  outline: 1.5px solid rgb(255 255 74);
+  box-shadow: 0 calc(2px * var(--total-scale-factor)) calc(5px * var(--total-scale-factor)) rgb(136 136 136);
+  color: black;
+  font: message-box;
+  white-space: normal;
+  word-wrap: break-word;
+  cursor: pointer;
+  pointer-events: auto;
+  user-select: text;
+}
+
+.annotationLayer .popupAnnotation.focused .popup {
+  outline-width: 3px;
+}
+
+.annotationLayer .popup * {
+  font-size: calc(9px * var(--total-scale-factor));
+}
+
+.annotationLayer .popup > .header {
+  display: inline-block;
+}
+
+.annotationLayer .popup > .header > .title {
+  display: inline;
+  font-weight: bold;
+}
+
+.annotationLayer .popup > .header .popupDate {
+  display: inline-block;
+  width: fit-content;
+  margin-left: calc(5px * var(--total-scale-factor));
+}
+
+.annotationLayer .popupContent {
+  margin-top: calc(2px * var(--total-scale-factor));
+  padding-top: calc(2px * var(--total-scale-factor));
+  border-top: 1px solid rgb(51 51 51);
+}
+
+.annotationLayer .richText > * {
+  font-size: calc(9px * var(--total-scale-factor));
+  white-space: pre-wrap;
+}
+
+.annotationLayer .annotationTextContent {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  color: transparent;
+  opacity: 0;
+  pointer-events: none;
+  user-select: none;
+}
+
+.annotationLayer .annotationTextContent span {
+  display: inline-block;
+  width: 100%;
+}
+
+.annotationLayer svg.quadrilateralsContainer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: -1;
+  width: 0;
+  height: 0;
+  contain: strict;
+}
+
+@media screen and (forced-colors: active) {
+  .annotationLayer {
+    --link-outline: 1.5px solid LinkText;
+  }
+
+  .annotationLayer .popup {
+    outline: calc(1.5px * var(--total-scale-factor)) solid CanvasText !important;
+    background-color: ButtonFace !important;
+    color: ButtonText !important;
+  }
+}

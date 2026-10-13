@@ -7,5 +7,7 @@ export const doc: FormatDefinition = {
   extensions: ['.doc'],
   maxFileSize: MAX_FILE_SIZE.doc,
   webview: 'doc',
+  // The preview is plain text in the DOM, so VS Code's find widget searches it.
+  findWidget: true,
   check: (bytes) => checkCompoundFile(bytes, '.doc'),
 };
