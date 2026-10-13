@@ -274,3 +274,21 @@
   white-space: nowrap;
   user-select: text;
 }
+
+.dl-csvbar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  margin-left: 12px;
+}
+
+.dl-csv-info {
+  margin-right: 4px;
+  color: var(--dl-dim);
+}
+
+.dl-csvbar [aria-pressed='true'] {
+  background: var(--dl-hover);
+  border-color: var(--dl-input-border);
+}

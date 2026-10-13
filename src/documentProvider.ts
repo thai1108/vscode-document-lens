@@ -9,6 +9,7 @@ import { parseWebviewMessage, type HostMessage } from './protocol.ts';
 import { webviewHtml } from './webviewHtml.ts';
 
 const RELOAD_DEBOUNCE_MS = 500;
+export const OPEN_AS_TEXT_COMMAND = 'documentLens.openAsText';
 
 function fileNameOf(uri: vscode.Uri): string {
   return path.posix.basename(uri.path);
@@ -105,12 +106,18 @@ export class DocumentLensProvider implements vscode.CustomReadonlyEditorProvider
   }
 
   static register(context: vscode.ExtensionContext): vscode.Disposable[] {
-    return FORMATS.map((format) =>
-      vscode.window.registerCustomEditorProvider(viewTypeOf(format), new DocumentLensProvider(context.extensionUri, format), {
-        webviewOptions: { retainContextWhenHidden: true, enableFindWidget: format.findWidget ?? false },
-        supportsMultipleEditorsPerDocument: true,
+    return [
+      ...FORMATS.map((format) =>
+        vscode.window.registerCustomEditorProvider(viewTypeOf(format), new DocumentLensProvider(context.extensionUri, format), {
+          webviewOptions: { retainContextWhenHidden: true, enableFindWidget: format.findWidget ?? false },
+          supportsMultipleEditorsPerDocument: true,
+        }),
+      ),
+      vscode.commands.registerCommand(OPEN_AS_TEXT_COMMAND, (uri?: unknown) => {
+        const target = uri instanceof vscode.Uri ? uri : activeTextFormatUri();
+        return target ? openAsText(target) : undefined;
       }),
-    );
+    ];
   }
 
   openCustomDocument(uri: vscode.Uri): Promise<LensDocument> {
@@ -142,9 +149,26 @@ export class DocumentLensProvider implements vscode.CustomReadonlyEditorProvider
           case 'openLink':
             void vscode.env.openExternal(vscode.Uri.parse(message.url, true));
             break;
+          case 'openAsText':
+            if (this.format.text) {
+              void openAsText(document.uri);
+            }
+            break;
         }
       }),
     ];
     panel.onDidDispose(() => subscriptions.forEach((subscription) => subscription.dispose()));
   }
+}
+
+/** Opens a file in VS Code's text editor, in a tab of the active editor group. */
+function openAsText(uri: vscode.Uri): Thenable<unknown> {
+  return vscode.commands.executeCommand('vscode.openWith', uri, 'default');
+}
+
+/** The file of the active Document Lens editor, if it shows a text format. */
+function activeTextFormatUri(): vscode.Uri | undefined {
+  const input = vscode.window.tabGroups.activeTabGroup.activeTab?.input;
+  const textViewTypes = FORMATS.filter((format) => format.text).map(viewTypeOf);
+  return input instanceof vscode.TabInputCustom && textViewTypes.includes(input.viewType) ? input.uri : undefined;
 }

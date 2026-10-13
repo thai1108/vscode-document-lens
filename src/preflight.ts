@@ -1,5 +1,6 @@
 // Cheap structural checks run on the host before a file's bytes are handed to a viewer, so an obviously wrong or
 // hostile file gets a clear message instead of a library failing (or unpacking a ZIP bomb) inside the webview.
+import { sniffEncoding } from './csv/encoding.ts';
 import { OOXML_ZIP_LIMITS } from './limits.ts';
 import { ZipArchive } from './zip.ts';
 
@@ -25,6 +26,22 @@ export function checkPdf(bytes: Uint8Array): void {
   const head = Buffer.from(bytes.buffer, bytes.byteOffset, Math.min(bytes.byteLength, PDF_HEADER_WINDOW + PDF_SIGNATURE.length));
   if (!head.includes(PDF_SIGNATURE, 0, 'latin1')) {
     throw new Error('Not a .pdf file (no %PDF- header)');
+  }
+}
+
+/** .csv and .tsv files are text; a workbook or other binary file saved under their extension is named for what it is. */
+export function checkText(bytes: Uint8Array, extension: string): void {
+  if (isZip(bytes)) {
+    throw new Error(`This ${extension} file is a ZIP package, probably an .xlsx workbook with the wrong extension`);
+  }
+  if (isCompoundFile(bytes)) {
+    throw new Error(`This ${extension} file is an Office binary file, probably an .xls workbook with the wrong extension`);
+  }
+  if (Buffer.from(bytes.buffer, bytes.byteOffset, Math.min(bytes.byteLength, PDF_SIGNATURE.length)).toString('latin1') === PDF_SIGNATURE) {
+    throw new Error(`This ${extension} file is a PDF document`);
+  }
+  if (sniffEncoding(bytes) === 'binary') {
+    throw new Error(`This ${extension} file contains binary data, not text`);
   }
 }
 

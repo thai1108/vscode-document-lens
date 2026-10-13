@@ -12,6 +12,9 @@ export const MAX_FILE_SIZE = {
   xls: 64 * MB,
   pptx: 200 * MB,
   ppt: 128 * MB,
+  // Every field becomes a string in the webview, so a text file costs several times its size there.
+  csv: 64 * MB,
+  tsv: 64 * MB,
 } as const;
 
 /** Bounds on an OOXML package (.docx/.xlsx/.pptx) checked from its ZIP central directory before a viewer unpacks it. */

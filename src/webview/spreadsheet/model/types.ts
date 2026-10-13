@@ -1,5 +1,6 @@
 // The workbook model both readers (.xlsx and .xls) produce and the grid renders. Sizes are CSS pixels at 100% zoom;
 // colors are `#rrggbb`.
+import type { CsvDetails } from '../csv/workbook.ts';
 import type { CellRange, CellRef } from './address.ts';
 import type { CellStore } from './cells.ts';
 
@@ -151,6 +152,8 @@ export interface Workbook {
   readonly formats: readonly CellFormat[];
   readonly sharedStrings: StringTable;
   readonly notices: readonly string[];
+  /** How a .csv or .tsv file is written, shown in the toolbar. */
+  readonly csv?: CsvDetails;
   loadSheet(index: number, signal?: AbortSignal): Promise<Sheet>;
 }
 

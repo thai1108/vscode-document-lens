@@ -1,13 +1,15 @@
+import { csv } from './csv.ts';
 import { doc } from './doc.ts';
 import { docx } from './docx.ts';
 import { pdf } from './pdf.ts';
 import { ppt } from './ppt.ts';
 import { pptx } from './pptx.ts';
+import { tsv } from './tsv.ts';
 import type { FormatDefinition } from './types.ts';
 import { xls } from './xls.ts';
 import { xlsx } from './xlsx.ts';
 
-export const FORMATS: readonly FormatDefinition[] = [pdf, docx, doc, xlsx, xls, pptx, ppt];
+export const FORMATS: readonly FormatDefinition[] = [pdf, docx, doc, xlsx, xls, pptx, ppt, csv, tsv];
 
 export function formatForFile(fileName: string): FormatDefinition | undefined {
   const name = fileName.toLowerCase();

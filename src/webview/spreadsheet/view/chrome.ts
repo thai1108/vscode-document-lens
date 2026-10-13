@@ -1,4 +1,7 @@
-// Controls around the grid: the sheet tabs under it and the cell bar in the toolbar.
+// Controls around the grid: the sheet tabs under it, the cell bar and, for .csv/.tsv files, the CSV bar in the toolbar.
+import { delimiterLabel, lineEndingLabel } from '../../../csv/dialect.ts';
+import { encodingLabel } from '../../../csv/encoding.ts';
+import type { CsvDetails } from '../csv/workbook.ts';
 import type { SheetEntry } from '../model/types.ts';
 
 export class SheetTabs {
@@ -63,4 +66,36 @@ export class CellBar {
     this.value.textContent = info?.text.replace(/[\r\n]+/g, ' ') ?? '';
     this.value.title = info?.text ?? '';
   }
+}
+
+/** For .csv and .tsv files: how the file is written, the header row switch and the way back to the text editor. */
+export class CsvBar {
+  readonly element: HTMLElement;
+
+  constructor(document: Document, details: CsvDetails, actions: { toggleHeaderRow(): void; openAsText(): void }) {
+    this.element = document.createElement('div');
+    this.element.className = 'dl-csvbar';
+    const info = document.createElement('span');
+    info.className = 'dl-csv-info';
+    info.id = 'dl-csv-info';
+    const lineBreaks = `${lineEndingLabel(details.lineEnding)}${details.mixedLineEndings ? ' (mixed)' : ''}`;
+    info.textContent = [delimiterLabel(details.delimiter), encodingLabel(details.encoding), lineBreaks].join(' · ');
+    info.title = `Delimiter: ${delimiterLabel(details.delimiter)}\nEncoding: ${encodingLabel(details.encoding)}\nLine breaks: ${lineBreaks}`;
+    const header = button(document, 'dl-csv-header', 'Header row', 'Show the first row as column names, kept at the top');
+    header.setAttribute('aria-pressed', String(details.headerRow));
+    header.addEventListener('click', () => actions.toggleHeaderRow());
+    const text = button(document, 'dl-open-as-text', 'Open as text', 'Reopen this file in the text editor');
+    text.addEventListener('click', () => actions.openAsText());
+    this.element.append(info, header, text);
+  }
+}
+
+function button(document: Document, id: string, label: string, title: string): HTMLButtonElement {
+  const element = document.createElement('button');
+  element.type = 'button';
+  element.id = id;
+  element.className = 'text-button';
+  element.textContent = label;
+  element.title = title;
+  return element;
 }
