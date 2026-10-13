@@ -1,5 +1,6 @@
 import '../shell/shell.css';
+import './docx.css';
 import { startViewer } from '../shell/app.ts';
-import { placeholderViewer } from '../shell/placeholder.ts';
+import { docxViewer } from './viewer.ts';
 
-startViewer(placeholderViewer('.docx document'));
+startViewer(docxViewer());

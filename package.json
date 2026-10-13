@@ -130,6 +130,9 @@
     "package": "pnpm check && vsce package --no-dependencies"
   },
   "packageManager": "pnpm@10.15.1",
+  "dependencies": {
+    "docx-preview": "0.4.1"
+  },
   "devDependencies": {
     "@eslint/js": "10.0.1",
     "@playwright/test": "1.63.0",
