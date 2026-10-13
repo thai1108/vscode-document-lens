@@ -3,9 +3,10 @@ import { before, describe, it } from 'node:test';
 import { MAX_XML_PART_SIZE } from '../../../src/limits.ts';
 import { relsPartName, resolvePartName } from '../../../src/webview/pptx/package.ts';
 import { bool, child, children, decodeXml, find, kids, num, parseXml, relAttr } from '../../../src/webview/pptx/xml.ts';
+import { installDom } from './dom.ts';
 
 describe('package parts as XML', () => {
-  before(async () => (await import('./dom.ts')).installDom());
+  before(() => installDom());
 
   it('parses a part into its root element', () => {
     const root = parseXml('<?xml version="1.0"?><p:sld xmlns:p="urn:p" show="0"><p:cSld/></p:sld>', 'slide1.xml');

@@ -329,7 +329,7 @@ function runFamily(run: RunStyle, context: RenderContext): string {
   return fontFamily(latin, eastAsian, resolveTypeface(run.cs, theme, run.lang));
 }
 
-export function runColor(run: RunStyle, colors: ColorContext): Rgba {
+function runColor(run: RunStyle, colors: ColorContext): Rgba {
   const fill = run.fill;
   const fallback = hexToRgba(colors.scheme[colors.map['tx1'] ?? 'dk1']) ?? { r: 0, g: 0, b: 0, a: 1 };
   switch (fill?.localName) {

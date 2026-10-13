@@ -2,15 +2,16 @@ import assert from 'node:assert/strict';
 import { before, describe, it } from 'node:test';
 import { Deck, matchPlaceholder, placeholderOf } from '../../../src/webview/pptx/deck.ts';
 import { TextStyleResolver } from '../../../src/webview/pptx/textStyle.ts';
-import { child, find } from '../../../src/webview/pptx/xml.ts';
+import { child, find, kids } from '../../../src/webview/pptx/xml.ts';
 import { sampleDeck } from '../../fixtures/pptx.ts';
 import { writeZip } from '../../support/zipWriter.ts';
 import { installDom } from './dom.ts';
 
 let deck: Deck;
 
+/** A top-level shape of a slide, layout or master by its cNvPr name (the first child is always its nv*Pr). */
 function shapeNamed(root: Element, name: string): Element {
-  const shape = [...(find(root, 'cSld', 'spTree')?.children ?? [])].find((node) => node.querySelector('cNvPr')?.getAttribute('name') === name || find(node, 'nvSpPr', 'cNvPr')?.getAttribute('name') === name);
+  const shape = kids(find(root, 'cSld', 'spTree')).find((node) => child(kids(node)[0], 'cNvPr')?.getAttribute('name') === name);
   return shape ?? assert.fail(`no shape ${name}`);
 }
 

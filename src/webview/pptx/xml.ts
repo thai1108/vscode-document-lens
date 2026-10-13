@@ -2,7 +2,7 @@
 // DrawingML never give one name two meanings, and producers do not always use the usual prefixes.
 import { formatMegabytes, MAX_XML_PART_SIZE } from '../../limits.ts';
 
-export const RELATIONSHIPS_NS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+const RELATIONSHIPS_NS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
 
 export function decodeXml(bytes: Uint8Array): string {
   if (bytes[0] === 0xff && bytes[1] === 0xfe) {

@@ -167,7 +167,7 @@ interface Linear {
 const clamp01 = (value: number) => Math.min(1, Math.max(0, value));
 
 /** Applies the transform elements (lumMod, tint, alpha, ...) in document order. */
-export function applyTransforms(color: Rgba, transforms: readonly Element[]): Rgba {
+function applyTransforms(color: Rgba, transforms: readonly Element[]): Rgba {
   return transforms.reduce((result, transform) => transformColor(result, transform.localName, num(transform, 'val')), color);
 }
 
@@ -303,7 +303,7 @@ function fromLinear(color: Linear): Rgba {
   return { r: channel(color.r), g: channel(color.g), b: channel(color.b), a: 1 };
 }
 
-export function rgbaToHsl(color: Rgba): Hsl {
+function rgbaToHsl(color: Rgba): Hsl {
   const r = color.r / 255;
   const g = color.g / 255;
   const b = color.b / 255;
@@ -326,7 +326,7 @@ export function rgbaToHsl(color: Rgba): Hsl {
   return { h: h * 60, s, l };
 }
 
-export function hslToRgba(hsl: Hsl, a: number): Rgba {
+function hslToRgba(hsl: Hsl, a: number): Rgba {
   const { s, l } = hsl;
   const h = wrapHue(hsl.h) / 360;
   if (s === 0) {

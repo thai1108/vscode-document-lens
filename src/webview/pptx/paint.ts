@@ -7,7 +7,7 @@ import type { Theme } from './theme.ts';
 import { EMU_PER_PX } from './units.ts';
 import { attr, child, children, find, kids, num, relAttr } from './xml.ts';
 
-export const SVG_NS = 'http://www.w3.org/2000/svg';
+const SVG_NS = 'http://www.w3.org/2000/svg';
 
 export interface GradientStop {
   readonly offset: number;
@@ -56,7 +56,7 @@ export interface Box {
 let sequence = 0;
 
 /** Document-wide unique ids: thumbnails and the main view render the same slide into one document. */
-export function uniqueId(prefix: string): string {
+function uniqueId(prefix: string): string {
   sequence += 1;
   return `pptx-${prefix}-${sequence}`;
 }
@@ -147,7 +147,7 @@ export async function readBlipFill(fill: Element, context: RenderContext): Promi
 }
 
 /** The picture a:blip points at: its SVG version when there is one, never an external (linked) file. */
-export async function pictureOf(blip: Element | undefined, context: RenderContext): Promise<Picture> {
+async function pictureOf(blip: Element | undefined, context: RenderContext): Promise<Picture> {
   if (!blip) {
     return { unsupported: 'Picture' };
   }
@@ -180,7 +180,7 @@ export function styleReference(reference: Element | undefined, list: readonly El
 }
 
 /** fillRef / bgRef: 1-999 index the theme's fill styles, 1001+ its background fill styles. */
-export function themeFillList(theme: Theme, reference: Element | undefined): { list: readonly Element[]; offset: number } {
+function themeFillList(theme: Theme, reference: Element | undefined): { list: readonly Element[]; offset: number } {
   const idx = num(reference, 'idx') ?? 0;
   return idx >= 1001 ? { list: theme.bgFillStyles, offset: 1000 } : { list: theme.fillStyles, offset: 0 };
 }
@@ -300,7 +300,7 @@ function imagePattern(id: string, paint: Extract<Paint, { kind: 'image' }>, box:
  * Where the whole picture goes so that its srcRect-cropped part fills the fillRect-inset box (negative values extend
  * beyond it).
  */
-export function imageRect(box: Box, srcRect: Insets = { l: 0, t: 0, r: 0, b: 0 }, fillRect: Insets = { l: 0, t: 0, r: 0, b: 0 }): { x: number; y: number; w: number; h: number } {
+function imageRect(box: Box, srcRect: Insets = { l: 0, t: 0, r: 0, b: 0 }, fillRect: Insets = { l: 0, t: 0, r: 0, b: 0 }): { x: number; y: number; w: number; h: number } {
   const tx = box.w * fillRect.l;
   const ty = box.h * fillRect.t;
   const tw = box.w * (1 - fillRect.l - fillRect.r);

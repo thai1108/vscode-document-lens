@@ -127,7 +127,7 @@ async function tableStyle(id: string | undefined, context: RenderContext): Promi
 }
 
 /** The style regions a cell falls in, least specific first. */
-export function regionsOf(cell: Cell, flags: Flags, rowCount: number, columnCount: number): Region[] {
+function regionsOf(cell: Cell, flags: Flags, rowCount: number, columnCount: number): Region[] {
   const regions: Region[] = ['wholeTbl'];
   const lastRowIndex = rowCount - 1;
   const lastColumnIndex = columnCount - 1;

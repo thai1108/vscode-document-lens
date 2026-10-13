@@ -292,7 +292,7 @@ function renderText(shape: Element, txBody: Element, chain: readonly Element[], 
  * shapes (and tables) follows the presentation's default text style, which PowerPoint ranks above the master's
  * otherStyle for them.
  */
-export function baseTextStyles(context: RenderContext, placeholderKind: Inherited['textKind']): (Element | undefined)[] {
+function baseTextStyles(context: RenderContext, placeholderKind: Inherited['textKind']): (Element | undefined)[] {
   const master = context.slide.master;
   return placeholderKind ? [context.deck.defaultTextStyle, master?.textStyles[placeholderKind]] : [master?.textStyles.other, context.deck.defaultTextStyle];
 }
@@ -542,7 +542,7 @@ function renderInk(member: Element, container: Container, context: RenderContext
 }
 
 /** A labelled stand-in for content the viewer does not draw (charts, embedded objects, unsupported pictures). */
-export function placeholderLabel(text: string): HTMLElement {
+function placeholderLabel(text: string): HTMLElement {
   const element = document.createElement('div');
   element.className = 'pptx-placeholder';
   const label = document.createElement('span');

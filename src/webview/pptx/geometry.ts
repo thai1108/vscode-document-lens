@@ -83,7 +83,7 @@ function fromSource(source: PresetSource): GeometryDef {
   };
 }
 
-export function parseAdjust(text: string | undefined): Formula[] {
+function parseAdjust(text: string | undefined): Formula[] {
   const tokens = text?.trim().split(/\s+/).filter(Boolean) ?? [];
   const result: Formula[] = [];
   for (let i = 0; i + 1 < tokens.length; i += 2) {
@@ -92,7 +92,7 @@ export function parseAdjust(text: string | undefined): Formula[] {
   return result;
 }
 
-export function parseFormulas(text: string | undefined): Formula[] {
+function parseFormulas(text: string | undefined): Formula[] {
   return (text ?? '')
     .split(';')
     .map((entry) => entry.trim().split(/\s+/))
