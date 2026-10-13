@@ -7,5 +7,8 @@ export const docx: FormatDefinition = {
   extensions: ['.docx'],
   maxFileSize: MAX_FILE_SIZE.docx,
   webview: 'docx',
+  // The pages are DOM text, so VS Code's find widget can search them. No CSP extras: pictures and embedded fonts are
+  // blob: URLs, and the document's style sheets are <style nonce> elements.
+  findWidget: true,
   check: (bytes) => checkOoxmlPackage(bytes, '.docx'),
 };

@@ -131,6 +131,8 @@
   },
   "packageManager": "pnpm@10.15.1",
   "dependencies": {
+    "docx-preview": "0.4.1",
+    "jszip": "3.10.2",
     "pdfjs-dist": "6.3.289"
   },
   "devDependencies": {

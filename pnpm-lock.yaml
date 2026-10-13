@@ -12,6 +12,12 @@ importers:
 
   .:
     dependencies:
+      docx-preview:
+        specifier: 0.4.1
+        version: 0.4.1
+      jszip:
+        specifier: 3.10.2
+        version: 3.10.2
       pdfjs-dist:
         specifier: 6.3.289
         version: 6.3.289
@@ -809,6 +815,9 @@ packages:
   diff@7.0.0:
     resolution: {integrity: sha512-PJWHUb1RFevKCwaFA9RlG5tCd+FO5iRh9A8HEtkmBH2Li03iJriB6m6JIN4rGz3K3JLawI7/veA1xzRKP6ISBw==}
     engines: {node: '>=0.3.1'}
+
+  docx-preview@0.4.1:
+    resolution: {integrity: sha512-Dv4g+LeE0swHpPvNC0lAT0YsR5Zq5pAxw7d3vHQ8EChBLgIrqqe9VPL5nVt2HBJap8bEZbXUI0TJob7kBeNU9w==}
 
   dunder-proto@1.0.1:
     resolution: {integrity: sha512-KIN/nDJBQRcXw0MLVhZE9iQHmG68qAVIBg9CqmUYjmQIhgij9U5MFvrqkUL5FbtyyzZuOeOt0zdeRe4UY7ct+A==}
@@ -2377,6 +2386,10 @@ snapshots:
   define-lazy-prop@3.0.0: {}
 
   diff@7.0.0: {}
+
+  docx-preview@0.4.1:
+    dependencies:
+      jszip: 3.10.2
 
   dunder-proto@1.0.1:
     dependencies:
