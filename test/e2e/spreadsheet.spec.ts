@@ -217,18 +217,26 @@ test('a 100,000 × 50 sheet: only a window of cells exists, scrolling anywhere s
     const corner = cellWithText(page, String(largeSheetValue(0, 0)));
     const cornerBefore = await box(corner);
 
-    // Steady scrolling, timed: drawing a new window must stay cheap (it once took ~1 s per window).
-    const elapsed = await grid.evaluate(async (element) => {
-      const started = performance.now();
-      for (let i = 0; i < 60; i++) {
-        element.scrollTop += 300;
+    // Drawing a new window must stay cheap (it once took ~1 s). Each step jumps past the drawn window, so every step
+    // redraws; its own work (the scroll handler plus the layout it causes) is timed and the median judged, so a slow or
+    // busy machine does not fail the test while a window that is costly to draw still does.
+    const steps = await grid.evaluate(async (element) => {
+      const times: number[] = [];
+      for (let i = 0; i < 30; i++) {
+        const started = performance.now();
+        element.scrollTop += 3 * element.clientHeight;
         element.dispatchEvent(new Event('scroll'));
+        element.querySelector('.dl-cell:last-child')?.getBoundingClientRect();
+        times.push(performance.now() - started);
         await new Promise((resolve) => requestAnimationFrame(resolve));
       }
-      return performance.now() - started;
+      return { times: times.sort((a, b) => a - b), top: element.scrollTop };
     });
-    test.info().annotations.push({ type: 'scrolling', description: `60 steps of 300px in ${Math.round(elapsed)} ms` });
-    expect(elapsed).toBeLessThan(6000);
+    const median = steps.times[steps.times.length >> 1] ?? Infinity;
+    test.info().annotations.push({ type: 'scrolling', description: `30 steps of 3 screens: median ${median.toFixed(1)} ms, slowest ${steps.times.at(-1)?.toFixed(1)} ms` });
+    expect(median).toBeLessThan(250);
+    // The window followed: the row now at the top of the scrolling part is drawn.
+    await expect(cellWithText(page, String(largeSheetValue(Math.floor(steps.top / 20) + 5, 0)))).toBeInViewport();
 
     await grid.evaluate((element) => {
       element.scrollTop = element.scrollHeight;

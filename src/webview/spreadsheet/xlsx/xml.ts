@@ -77,12 +77,24 @@ export class XmlTag {
   }
 }
 
+/** How far the search for the end of the token at the start of the buffer got in the previous chunk. */
+interface Resume {
+  /** Characters of the buffer already searched. */
+  searched: number;
+  /** Quote character the search stopped inside (an attribute value), or 0. */
+  quote: number;
+  /** Bracket depth of a declaration's internal subset. */
+  depth: number;
+}
+
 export class XmlScanner {
   /** Whether character data is decoded and passed to the handler; off by default, which skips it cheaply. */
   wantText = false;
   private readonly handler: XmlHandler;
   private readonly tag = new XmlTag();
   private buffer = '';
+  /** Set when a chunk ends inside a token, so the next chunk continues the search instead of starting over. */
+  private resume: Resume | undefined;
 
   constructor(handler: XmlHandler) {
     this.handler = handler;
@@ -103,42 +115,52 @@ export class XmlScanner {
       this.handler.text?.(decodeEntities(this.buffer));
     }
     this.buffer = '';
+    this.resume = undefined;
   }
 
   /** Processes complete tokens and returns how many characters were consumed. */
   private scan(s: string): number {
     const handler = this.handler;
+    const resume = this.resume;
+    this.resume = undefined;
     let pos = 0;
     for (;;) {
-      const lt = s.indexOf('<', pos);
+      // Text pending from the previous chunk had no '<' in the part already searched.
+      const lt = s.indexOf('<', pos === 0 && resume && s.charCodeAt(0) !== 60 ? resume.searched : pos);
       if (lt < 0) {
+        if (!this.wantText) {
+          return s.length;
+        }
         // Text up to the end may continue in the next chunk.
-        return this.wantText ? pos : s.length;
+        return this.stop(s, pos, 0, 0);
       }
       if (lt > pos && this.wantText) {
         handler.text?.(decodeEntities(s.slice(pos, lt)));
       }
       pos = lt;
+      // The token the previous chunk ended in, if this is it.
+      const again = lt === 0 && resume && s.charCodeAt(0) === 60 ? resume : undefined;
+      const searched = again?.searched ?? 0;
       const next = s.charCodeAt(lt + 1);
       if (next === 33) {
         // <!-- -->, <![CDATA[ ]]> or a declaration such as <!DOCTYPE ...>.
         if (s.startsWith('<!--', lt)) {
-          const end = s.indexOf('-->', lt + 4);
+          const end = s.indexOf('-->', Math.max(lt + 4, searched - 2));
           if (end < 0) {
-            return pos;
+            return this.stop(s, pos, 0, 0);
           }
           pos = end + 3;
         } else if (s.startsWith('<![CDATA[', lt)) {
-          const end = s.indexOf(']]>', lt + 9);
+          const end = s.indexOf(']]>', Math.max(lt + 9, searched - 2));
           if (end < 0) {
-            return pos;
+            return this.stop(s, pos, 0, 0);
           }
           if (this.wantText) {
             handler.text?.(s.slice(lt + 9, end));
           }
           pos = end + 3;
         } else {
-          const end = declarationEnd(s, lt + 2);
+          const end = this.declarationEnd(s, lt, Math.max(lt + 2, searched), again?.depth ?? 0);
           if (end < 0) {
             return pos;
           }
@@ -147,14 +169,14 @@ export class XmlScanner {
         continue;
       }
       if (next === 63) {
-        const end = s.indexOf('?>', lt + 2);
+        const end = s.indexOf('?>', Math.max(lt + 2, searched - 1));
         if (end < 0) {
-          return pos;
+          return this.stop(s, pos, 0, 0);
         }
         pos = end + 2;
         continue;
       }
-      const end = tagEnd(s, lt + 1);
+      const end = this.tagEnd(s, lt, Math.max(lt + 1, searched), again?.quote ?? 0);
       if (end < 0) {
         return pos;
       }
@@ -174,6 +196,61 @@ export class XmlScanner {
       }
       pos = end + 1;
     }
+  }
+
+  /** Keeps the unfinished token from `pos` for the next chunk, remembering that all of `s` was searched. */
+  private stop(s: string, pos: number, quote: number, depth: number): number {
+    this.resume = { searched: s.length - pos, quote, depth };
+    return pos;
+  }
+
+  /**
+   * Index of the `>` closing the tag at `start`, skipping quoted attribute values; -1 (with the
+   * search state kept) if it is not in `s` yet. `quote` is the quote an earlier search stopped inside.
+   */
+  private tagEnd(s: string, start: number, from: number, quote: number): number {
+    let i = from;
+    if (quote) {
+      const close = s.indexOf(quote === 34 ? '"' : "'", i);
+      if (close < 0) {
+        this.stop(s, start, quote, 0);
+        return -1;
+      }
+      i = close + 1;
+    }
+    for (; i < s.length; i++) {
+      const code = s.charCodeAt(i);
+      if (code === 62) {
+        return i;
+      }
+      if (code === 34 || code === 39) {
+        const close = s.indexOf(code === 34 ? '"' : "'", i + 1);
+        if (close < 0) {
+          this.stop(s, start, code, 0);
+          return -1;
+        }
+        i = close;
+      }
+    }
+    this.stop(s, start, 0, 0);
+    return -1;
+  }
+
+  /** End of a `<!...>` declaration, skipping a bracketed internal DTD subset. */
+  private declarationEnd(s: string, start: number, from: number, depth: number): number {
+    let level = depth;
+    for (let i = from; i < s.length; i++) {
+      const code = s.charCodeAt(i);
+      if (code === 91) {
+        level++;
+      } else if (code === 93) {
+        level = Math.max(0, level - 1);
+      } else if (code === 62 && level === 0) {
+        return i;
+      }
+    }
+    this.stop(s, start, 0, level);
+    return -1;
   }
 }
 
@@ -210,40 +287,6 @@ export function decodeOoxmlEscapes(text: string): string {
 
 function isSpace(code: number): boolean {
   return code === 32 || code === 10 || code === 13 || code === 9;
-}
-
-/** Index of the `>` closing a tag that starts before `from`, skipping quoted attribute values; -1 if incomplete. */
-function tagEnd(s: string, from: number): number {
-  for (let i = from; i < s.length; i++) {
-    const code = s.charCodeAt(i);
-    if (code === 62) {
-      return i;
-    }
-    if (code === 34 || code === 39) {
-      const close = s.indexOf(code === 34 ? '"' : "'", i + 1);
-      if (close < 0) {
-        return -1;
-      }
-      i = close;
-    }
-  }
-  return -1;
-}
-
-/** End of a `<!...>` declaration, skipping a bracketed internal DTD subset. */
-function declarationEnd(s: string, from: number): number {
-  let depth = 0;
-  for (let i = from; i < s.length; i++) {
-    const code = s.charCodeAt(i);
-    if (code === 91) {
-      depth++;
-    } else if (code === 93) {
-      depth = Math.max(0, depth - 1);
-    } else if (code === 62 && depth === 0) {
-      return i;
-    }
-  }
-  return -1;
 }
 
 function nameEnd(s: string, from: number, to: number): number {

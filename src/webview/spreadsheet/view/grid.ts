@@ -12,11 +12,11 @@ import { columnName, formatRange, rangeContains, type CellRange, type CellRef } 
 import { CellKind } from '../model/cells.ts';
 import { cellDisplay, readCell, type CellDisplay, type TextAlign } from '../model/display.ts';
 import type { CellFormat, Hyperlink, Sheet, Workbook } from '../model/types.ts';
+import { RangeIndex } from '../model/rangeIndex.ts';
 import { Axis } from './axis.ts';
-import { MergeIndex } from './merges.ts';
 import { CellSelection, type NavigationBounds } from './selection.ts';
 import { applyFont, borderCss, type StyleRules } from './styleRules.ts';
-import { canvasExtent, contains, frozenExtent, position, scrollingSpan, scrollToShow, type AxisView, type Span } from './viewport.ts';
+import { canvasExtent, contains, countThatFits, frozenExtent, position, scrollingSpan, scrollToShow, type AxisView, type Span } from './viewport.ts';
 
 /** Column header height and row header digit width at 100%. */
 const HEADER_HEIGHT = 20;
@@ -65,8 +65,8 @@ export class Grid {
   private readonly leftBand: HTMLDivElement;
   private readonly rows: Axis;
   private readonly cols: Axis;
-  private readonly merges: MergeIndex;
-  private readonly links = new Map<number, Hyperlink>();
+  private readonly merges: RangeIndex<CellRange>;
+  private readonly links: RangeIndex<Hyperlink>;
   private zoom: number;
   private rowView: AxisView;
   private colView: AxisView;
@@ -79,24 +79,23 @@ export class Grid {
   /** Number texts drawn since the last fitNumbers(). */
   private numbers: HTMLElement[] = [];
   /** Rows of the used range left out because the grid would be taller than the browser can lay out. */
-  rowsCut = false;
+  cutOff = { rows: false, cols: false };
+  /** First frozen row and column: those above and left of them are scrolled out of view, as in Excel. */
+  private readonly frozenTop: number;
+  private readonly frozenLeft: number;
 
   constructor(document: Document, host: GridHost, sheet: Sheet, zoom: number) {
     this.host = host;
     this.sheet = sheet;
     this.formats = host.workbook.formats;
     this.zoom = zoom;
-    this.rows = new Axis(sheet.rows, SHEET_LIMITS.maxRows);
-    this.cols = new Axis(sheet.cols, SHEET_LIMITS.maxCols);
-    this.merges = new MergeIndex(sheet.merges);
+    this.frozenTop = sheet.frozen.rows > 0 ? sheet.frozen.top : 0;
+    this.frozenLeft = sheet.frozen.cols > 0 ? sheet.frozen.left : 0;
+    this.rows = new Axis(sheet.rows, SHEET_LIMITS.maxRows, this.frozenTop);
+    this.cols = new Axis(sheet.cols, SHEET_LIMITS.maxCols, this.frozenLeft);
+    this.merges = new RangeIndex((range: CellRange) => range, sheet.merges);
     this.selection = new CellSelection(this.merges);
-    for (const link of sheet.links) {
-      for (let row = link.range.top; row <= link.range.bottom && this.links.size < SHEET_LIMITS.maxLinks; row++) {
-        for (let col = link.range.left; col <= link.range.right && this.links.size < SHEET_LIMITS.maxLinks; col++) {
-          this.links.set(key(row, col), link);
-        }
-      }
-    }
+    this.links = new RangeIndex((link: Hyperlink) => link.range, sheet.links);
     const div = (className: string) => {
       const node = document.createElement('div');
       node.className = className;
@@ -241,15 +240,18 @@ export class Grid {
     const headerHeight = Math.round(HEADER_HEIGHT * zoom);
     const fill = (axis: Axis, length: number, header: number, limit: number) => axis.indexAt((length - header) / zoom, limit) + 2;
 
-    let rowCount = Math.min(SHEET_LIMITS.maxRows, Math.max(used.rows + EXTRA_ROWS, frozen.rows + 1, fill(this.rows, height, headerHeight, SHEET_LIMITS.maxRows)));
-    const tallest = this.rows.indexAt((SHEET_LIMITS.maxCanvasPx - headerHeight) / zoom, SHEET_LIMITS.maxRows);
-    this.rowsCut = rowCount > tallest && used.rows > tallest;
-    rowCount = Math.min(rowCount, tallest);
+    const frozenRows = frozen.rows > 0 ? this.frozenTop + frozen.rows : 0;
+    const frozenCols = frozen.cols > 0 ? this.frozenLeft + frozen.cols : 0;
+    // The grid cannot be larger than the browser lays out; past that, rows or columns are left out (with a notice).
+    const wantedRows = Math.min(SHEET_LIMITS.maxRows, Math.max(used.rows + EXTRA_ROWS, frozenRows + 1, fill(this.rows, height, headerHeight, SHEET_LIMITS.maxRows)));
+    const rowCount = countThatFits(this.rows, wantedRows, headerHeight, zoom, SHEET_LIMITS.maxCanvasPx);
     const rowHeaderWidth = Math.round((String(rowCount).length * HEADER_DIGIT_WIDTH + 12) * zoom);
-    const colCount = Math.min(SHEET_LIMITS.maxCols, Math.max(used.cols + EXTRA_COLS, frozen.cols + 1, fill(this.cols, width, rowHeaderWidth, SHEET_LIMITS.maxCols)));
+    const wantedCols = Math.min(SHEET_LIMITS.maxCols, Math.max(used.cols + EXTRA_COLS, frozenCols + 1, fill(this.cols, width, rowHeaderWidth, SHEET_LIMITS.maxCols)));
+    const colCount = countThatFits(this.cols, wantedCols, rowHeaderWidth, zoom, SHEET_LIMITS.maxCanvasPx);
+    this.cutOff = { rows: rowCount < used.rows, cols: colCount < used.cols };
 
-    this.rowView = { axis: this.rows, count: rowCount, frozen: Math.min(frozen.rows, rowCount - 1), header: headerHeight, zoom };
-    this.colView = { axis: this.cols, count: colCount, frozen: Math.min(frozen.cols, colCount - 1), header: rowHeaderWidth, zoom };
+    this.rowView = { axis: this.rows, count: rowCount, frozen: Math.min(frozenRows, rowCount - 1), header: headerHeight, zoom };
+    this.colView = { axis: this.cols, count: colCount, frozen: Math.min(frozenCols, colCount - 1), header: rowHeaderWidth, zoom };
     if (frozenExtent(this.rowView) > height * MAX_FROZEN_SHARE) {
       this.rowView.frozen = 0;
     }
@@ -348,11 +350,11 @@ export class Grid {
   }
 
   private frozenRows(): Span {
-    return { first: 0, last: this.rowView.frozen - 1 };
+    return { first: this.frozenTop, last: this.rowView.frozen - 1 };
   }
 
   private frozenCols(): Span {
-    return { first: 0, last: this.colView.frozen - 1 };
+    return { first: this.frozenLeft, last: this.colView.frozen - 1 };
   }
 
   private renderCorner(): void {
@@ -452,7 +454,19 @@ export class Grid {
         parts.push(element);
       }
     }
-    const covered = (row: number, col: number) => merges.some((merge) => rangeContains(merge, row, col));
+    // Merged cells cannot overlap (the sheet drops those that do), so each window row has only a few.
+    const mergesByRow = new Map<number, CellRange[]>();
+    for (const merge of merges) {
+      for (let row = Math.max(rows.first, merge.top); row <= Math.min(rows.last, merge.bottom); row++) {
+        const list = mergesByRow.get(row);
+        if (list) {
+          list.push(merge);
+        } else {
+          mergesByRow.set(row, [merge]);
+        }
+      }
+    }
+    const covered = (row: number, col: number) => mergesByRow.get(row)?.some((merge) => rangeContains(merge, row, col)) ?? false;
 
     const cells = this.sheet.cells;
     for (let row = rows.first; row <= rows.last; row++) {
@@ -462,9 +476,12 @@ export class Grid {
       const rowStart = cells.rowStartIndex(row);
       const end = cells.rowEndIndex(row);
       let index = cells.lowerBound(row, cols.first);
-      // Text from a cell left of this window may run into it.
-      const before = index - 1;
-      if (before >= rowStart && cells.col(before) >= colLimit.first) {
+      // Text from a cell left of this window may run into it, over formatted blanks in between.
+      let before = index - 1;
+      while (before >= rowStart && cells.kind(before) === CellKind.Blank && cells.col(before) > cols.first - OVERFLOW_MAX_COLS) {
+        before--;
+      }
+      if (before >= rowStart && cells.col(before) >= colLimit.first && cells.col(before) >= cols.first - OVERFLOW_MAX_COLS) {
         const element = this.renderCell(before, row, offset, colLimit, covered, cols.first);
         if (element) {
           parts.push(element);
@@ -531,7 +548,7 @@ export class Grid {
     if (display.color) {
       element.style.setProperty('color', display.color);
     }
-    const content = this.content(text, display, this.links.get(key(row, col)), format.wrap);
+    const content = this.content(text, display, this.links.at(row, col), format.wrap);
     if (spill && (spill.left || spill.right)) {
       element.classList.add('dl-spill');
       const wrapper = element.ownerDocument.createElement('span');
@@ -572,7 +589,7 @@ export class Grid {
         element.style.setProperty('color', display.color);
       }
       const text = format.wrap ? display.text : display.text.replace(/[\r\n]+/g, ' ');
-      element.append(this.content(text, display, this.links.get(key(merge.top, merge.left)), format.wrap));
+      element.append(this.content(text, display, this.links.at(merge.top, merge.left), format.wrap));
     }
     return element;
   }
@@ -767,10 +784,6 @@ export class Grid {
       origin: { row: this.rowView.frozen, col: this.colView.frozen },
     };
   }
-}
-
-function key(row: number, col: number): number {
-  return row * SHEET_LIMITS.maxCols + col;
 }
 
 function setBox(node: HTMLElement, left: number | undefined, top: number | undefined, width: number | undefined, height: number | undefined): void {

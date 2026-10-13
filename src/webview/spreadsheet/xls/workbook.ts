@@ -6,7 +6,7 @@ import { externalUrl } from '../../../protocol.ts';
 import { SHEET_LIMITS } from '../limits.ts';
 import { CellKind, NO_FORMULA } from '../model/cells.ts';
 import { emptySheet, SheetBuilder } from '../model/sheet.ts';
-import { baseColumnWidthPx, columnWidthPx, defaultRowHeightPt, maxDigitWidth, pointsToPx } from '../model/sizes.ts';
+import { baseColumnWidthPx, columnWidthPx, defaultRowHeightPt, maxDigitWidth, pointsToPx, sizesFromRanges, type SizeRange } from '../model/sizes.ts';
 import { DEFAULT_FONT, defaultFormat, EMPTY_STRINGS, type CellFormat, type Font, type Hyperlink, type Sheet, type SheetEntry, type Workbook } from '../model/types.ts';
 import { readBiffFormatting, type BiffSheet, type BiffWorkbook } from './biff.ts';
 
@@ -20,7 +20,6 @@ interface SheetJsCell {
 interface SheetJsSheet {
   '!data'?: (SheetJsCell[] | undefined)[];
   '!merges'?: { s: { r: number; c: number }; e: { r: number; c: number } }[];
-  '!cols'?: ({ wpx?: number; hidden?: boolean } | undefined)[];
   '!rows'?: ({ hpx?: number; hidden?: boolean } | undefined)[];
   '!type'?: string;
 }
@@ -43,7 +42,7 @@ export function openXls(bytes: Uint8Array): Workbook {
   const defaultFont = formatting?.defaultFont ?? DEFAULT_FONT;
   const date1904 = Boolean(book.Workbook?.WBProps?.date1904);
   const names = book.SheetNames.slice(0, SHEET_LIMITS.maxSheets);
-  const formattingByName = new Map((formatting?.sheets ?? []).map((sheet) => [sheet.name, sheet]));
+  const formattingByName = new Map((formatting?.sheets ?? []).map((sheet, index) => [sheet.name, { ...sheet, index }]));
   const sheets: SheetEntry[] = names.map((name, i) => {
     const own = formattingByName.get(name);
     const chart = book.Sheets[name]?.['!type'] === 'chart';
@@ -69,8 +68,10 @@ export function openXls(bytes: Uint8Array): Workbook {
       if (!entry) {
         return Promise.reject(new Error(`No sheet ${index}`));
       }
+      // A sheet's formatting is read when it is shown, and not kept: the converted sheet holds what is needed.
       const own = formattingByName.get(entry.name);
-      return Promise.resolve(convertSheet(entry, book.Sheets[entry.name] ?? {}, own, formats, defaultFont));
+      const sheetFormatting = formatting && own ? formatting.readSheet(own.index) : undefined;
+      return Promise.resolve(convertSheet(entry, book.Sheets[entry.name] ?? {}, sheetFormatting, formats, defaultFont));
     },
   };
 }
@@ -83,7 +84,9 @@ function readWithSheetJs(bytes: Uint8Array): SheetJsWorkbook {
     return readWorkbook(bytes, {
       type: 'array',
       dense: true,
-      cellStyles: true,
+      // Formatting comes from biff.ts. With cellStyles SheetJS would also make an object of every formatted blank
+      // cell and expand column ranges itself, both of which a crafted file can blow up.
+      cellStyles: false,
       cellNF: false,
       cellFormula: true,
       cellHTML: false,
@@ -185,6 +188,12 @@ function convertSheet(entry: SheetEntry, source: SheetJsSheet, formatting: BiffS
       }
     }
   }
+  // Formatted blank cells (fills, borders) come from the record scan; SheetJS has no cells for them.
+  formatting?.forEachBlank((r, c, format) => {
+    if (r < SHEET_LIMITS.maxRows && c < SHEET_LIMITS.maxCols && format < formats.length && !rows[r]?.[c]) {
+      sheet.add(r, c, CellKind.Blank, 0, format);
+    }
+  });
   for (const { s, e } of source['!merges'] ?? []) {
     sheet.addMerge({ top: s.r, left: s.c, bottom: e.r, right: e.c });
   }
@@ -193,7 +202,7 @@ function convertSheet(entry: SheetEntry, source: SheetJsSheet, formatting: BiffS
   }
   return sheet.build({
     rows: { defaultSize: formatting?.rowsHiddenByDefault ? 0 : defaultRow, sizes: rowSizes(source, formatting) },
-    cols: { defaultSize: defaultCol, sizes: columnSizes(source, formatting, digitWidth) },
+    cols: { defaultSize: defaultCol, sizes: columnSizes(formatting, digitWidth) },
     showGridLines: formatting?.showGridLines ?? true,
     ...(formatting ? { frozen: formatting.frozen } : {}),
     ...(formatting?.topLeft ? { topLeft: formatting.topLeft } : {}),
@@ -237,23 +246,8 @@ function rowSizes(source: SheetJsSheet, formatting: BiffSheet | undefined): Map<
   return sizes;
 }
 
-function columnSizes(source: SheetJsSheet, formatting: BiffSheet | undefined, digitWidth: number): Map<number, number> {
-  const sizes = new Map<number, number>();
-  if (formatting) {
-    for (const column of formatting.columns) {
-      const size = column.hidden ? 0 : columnWidthPx(column.width, digitWidth);
-      for (let col = column.first; col <= Math.min(column.last, SHEET_LIMITS.maxCols - 1); col++) {
-        sizes.set(col, size);
-      }
-    }
-    return sizes;
-  }
-  (source['!cols'] ?? []).forEach((col, i) => {
-    if (col?.hidden) {
-      sizes.set(i, 0);
-    } else if (col?.wpx) {
-      sizes.set(i, col.wpx);
-    }
-  });
-  return sizes;
+/** Column widths from COLINFO ranges (SheetJS is not asked for them; see readWithSheetJs). */
+function columnSizes(formatting: BiffSheet | undefined, digitWidth: number): Map<number, number> {
+  const ranges = (formatting?.columns ?? []).map((column): SizeRange => [column.first, column.last, column.hidden ? 0 : columnWidthPx(column.width, digitWidth)]);
+  return sizesFromRanges(ranges, SHEET_LIMITS.maxCols);
 }

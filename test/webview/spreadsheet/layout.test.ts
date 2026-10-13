@@ -2,8 +2,10 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { Axis } from '../../../src/webview/spreadsheet/view/axis.ts';
-import { MergeIndex } from '../../../src/webview/spreadsheet/view/merges.ts';
-import { canvasExtent, contains, frozenExtent, position, scrollingSpan, scrollToShow, type AxisView } from '../../../src/webview/spreadsheet/view/viewport.ts';
+import type { CellRange } from '../../../src/webview/spreadsheet/model/address.ts';
+import { RangeIndex } from '../../../src/webview/spreadsheet/model/rangeIndex.ts';
+import { sizesFromRanges, type SizeRange } from '../../../src/webview/spreadsheet/model/sizes.ts';
+import { canvasExtent, contains, countThatFits, frozenExtent, position, scrollingSpan, scrollToShow, type AxisView } from '../../../src/webview/spreadsheet/view/viewport.ts';
 
 // Entries 0-2 are 20px, entry 3 is hidden, entry 4 is 50px, the rest default to 20px.
 const axis = new Axis({ defaultSize: 20, sizes: new Map([[3, 0], [4, 50]]) }, 1_048_576);
@@ -36,25 +38,91 @@ describe('Axis', () => {
   });
 });
 
-describe('MergeIndex', () => {
-  const merges = [
+describe('RangeIndex', () => {
+  const merges: CellRange[] = [
     { top: 0, left: 0, bottom: 0, right: 3 },
     { top: 100, left: 2, bottom: 200, right: 4 },
     { top: 10, left: 0, bottom: 1_000_000, right: 0 },
   ];
-  const index = new MergeIndex(merges);
+  const index = new RangeIndex((range: CellRange) => range, merges);
 
-  it('finds merges overlapping a window, including very tall ones', () => {
+  it('finds ranges overlapping a window, including very tall ones', () => {
     assert.deepEqual(index.query(0, 5, 0, 10), [merges[0]]);
     assert.deepEqual(index.query(150, 160, 3, 3), [merges[1]]);
     assert.deepEqual(index.query(150, 160, 0, 10), [merges[1], merges[2]]);
     assert.deepEqual(index.query(500_000, 500_001, 0, 0), [merges[2]]);
     assert.deepEqual(index.query(150, 160, 5, 10), []);
+    assert.deepEqual(index.query(0, 1_048_575, 0, 16_383), merges, 'a lookup over the whole grid');
   });
 
-  it('finds the merge containing a cell', () => {
+  it('finds the range containing a cell, the last added when several do', () => {
     assert.equal(index.at(0, 2), merges[0]);
     assert.equal(index.at(1, 2), undefined);
+    const links = new RangeIndex((link: { range: CellRange; url: string }) => link.range, [
+      { range: { top: 0, left: 0, bottom: 1_048_575, right: 16_383 }, url: 'whole' },
+      { range: { top: 5, left: 5, bottom: 5, right: 5 }, url: 'one' },
+    ]);
+    assert.equal(links.at(5, 5)?.url, 'one');
+    assert.equal(links.at(1_048_575, 16_383)?.url, 'whole');
+  });
+
+  it('refuses ranges overlapping earlier ones', () => {
+    const free = new RangeIndex((range: CellRange) => range);
+    assert.equal(free.addIfFree({ top: 0, left: 0, bottom: 39, right: 9 }), true);
+    assert.equal(free.addIfFree({ top: 0, left: 0, bottom: 39, right: 9 }), false);
+    assert.equal(free.addIfFree({ top: 39, left: 9, bottom: 40, right: 10 }), false);
+    assert.equal(free.addIfFree({ top: 40, left: 0, bottom: 40, right: 1 }), true);
+    assert.equal(free.addIfFree({ top: 0, left: 0, bottom: 1_048_575, right: 16_383 }), false);
+    assert.equal(free.size, 2);
+  });
+
+  it('keeps memory and time bounded for many tall ranges', () => {
+    const tall = Array.from({ length: 20_000 }, (_value, i): CellRange => ({ top: 0, left: i % 16_000, bottom: 16_319, right: i % 16_000 }));
+    const started = performance.now();
+    const many = new RangeIndex((range: CellRange) => range);
+    let kept = 0;
+    for (const range of tall) {
+      kept += many.addIfFree(range) ? 1 : 0;
+    }
+    // Ranges this large (more than 16 tiles) are kept apart, and only the first 1024 of them.
+    assert.equal(kept, 1024);
+    assert.equal(many.at(100, 1023), tall[1023]);
+    assert.equal(many.at(100, 1024), undefined);
+    assert.ok(performance.now() - started < 10_000);
+  });
+});
+
+describe('fitting the grid in what the browser can lay out', () => {
+  const rows = new Axis({ defaultSize: 20, sizes: new Map() }, 1_048_576);
+
+  it('keeps every row when the canvas fits, including the last one', () => {
+    assert.equal(countThatFits(rows, 1_048_576, 20, 1, 30_000_000), 1_048_576);
+    assert.equal(countThatFits(rows, 1_048_576, 5, 0.25, 30_000_000), 1_048_576);
+  });
+
+  it('leaves out the rows past the limit when it does not', () => {
+    const count = countThatFits(rows, 1_048_576, 40, 2, 30_000_000);
+    assert.equal(count, Math.floor((30_000_000 - 40) / 40));
+    assert.ok(40 + rows.start(count) * 2 <= 30_000_000);
+    const cols = new Axis({ defaultSize: 1800, sizes: new Map() }, 16_384);
+    assert.ok(countThatFits(cols, 16_384, 50, 1.25, 30_000_000) < 16_384, 'very wide columns are cut too');
+  });
+
+  it('hides the entries scrolled out above a frozen pane', () => {
+    const scrolled = new Axis({ defaultSize: 20, sizes: new Map([[2, 40]]) }, 1_048_576, 4);
+    assert.deepEqual([0, 3, 4, 5].map((i) => scrolled.size(i)), [0, 0, 20, 20]);
+    assert.equal(scrolled.indexAt(0, 100), 4);
+  });
+
+  it('expands column ranges once, later ranges winning', () => {
+    const ranges: SizeRange[] = Array.from({ length: 20_000 }, (_value, i) => [0, 16_383, i]);
+    ranges.push([3, 5, 7]);
+    const started = performance.now();
+    const sizes = sizesFromRanges(ranges, 16_384);
+    assert.ok(performance.now() - started < 2000);
+    assert.equal(sizes.size, 16_384);
+    assert.deepEqual([sizes.get(0), sizes.get(4), sizes.get(16_383)], [19_999, 7, 19_999]);
+    assert.deepEqual([...sizesFromRanges([[2, 3, 1], [99_999, 100_000, 5]], 10)], [[2, 1], [3, 1]]);
   });
 });
 

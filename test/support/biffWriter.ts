@@ -55,6 +55,8 @@ export interface BiffSheetSpec {
   /** Height in points. */
   rows?: { row: number; height: number; hidden?: boolean }[];
   frozen?: { rows: number; cols: number };
+  /** Top-left cell of the view (WINDOW2): with frozen panes, the first frozen row and column. */
+  viewTopLeft?: { row: number; col: number };
   links?: { row: number; col: number; url: string }[];
   showGridLines?: boolean;
   /** OBJ records by object type (0x08 picture, 0x19 cell note, ...), without the drawing data Excel adds. */
@@ -239,10 +241,10 @@ function sheetStream(spec: BiffSheetSpec, sst: Map<string, number>, selected: bo
   const frozen = spec.frozen;
   const freeze = Boolean(frozen && (frozen.rows || frozen.cols));
   const window = 0x04b4 | (spec.showGridLines === false ? 0 : 0x02) | (freeze ? 0x0108 : 0) | (selected ? 0x0600 : 0);
-  records.add(0x023e, Buffer.concat([u16(window, 0, 0), u32(64), u16(0, 0), u32(0)]));
+  records.add(0x023e, Buffer.concat([u16(window, spec.viewTopLeft?.row ?? 0, spec.viewTopLeft?.col ?? 0), u32(64), u16(0, 0), u32(0)]));
   if (freeze && frozen) {
     const pane = frozen.rows && frozen.cols ? 0 : frozen.rows ? 2 : 1;
-    records.add(0x0041, Buffer.concat([u16(frozen.cols, frozen.rows, frozen.rows, frozen.cols), Buffer.from([pane, 0])]));
+    records.add(0x0041, Buffer.concat([u16(frozen.cols, frozen.rows, (spec.viewTopLeft?.row ?? 0) + frozen.rows, (spec.viewTopLeft?.col ?? 0) + frozen.cols), Buffer.from([pane, 0])]));
   }
   records.add(0x001d, Buffer.concat([u8(3), u16(0, 0, 0, 1, 0, 0), Buffer.from([0, 0])]));
   if (spec.merges?.length) {

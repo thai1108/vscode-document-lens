@@ -48,7 +48,7 @@ describe('sample.xls', () => {
     assert.equal(sales.rows.sizes.get(0), 32);
     assert.equal(Math.round(sales.rows.sizes.get(8) ?? 0), 53);
     assert.deepEqual(sales.merges, [{ top: 0, left: 0, bottom: 0, right: 2 }]);
-    assert.deepEqual(sales.frozen, { rows: 2, cols: 0 });
+    assert.deepEqual(sales.frozen, { rows: 2, cols: 0, top: 0, left: 0 });
     assert.deepEqual(sales.topLeft, { row: 2, col: 0 });
   });
 
@@ -112,14 +112,14 @@ describe('BIFF8 formatting records', () => {
         ],
       }),
     );
-    const sheet = formatting?.sheets[0];
+    const sheet = formatting?.readSheet(0);
     assert.equal(sheet?.formatAt(5, 1), 16);
     assert.equal(sheet?.formatAt(0, 2), 15);
     assert.equal(sheet?.formatAt(1, 1), undefined);
   });
 
   it('notices pictures and charts, but not cell notes', () => {
-    const objects = (types: number[]) => readBiffFormatting(biffStream({ ...SIMPLE, sheets: [{ name: 'S', cells: [], objects: types }] }))?.sheets[0]?.hasDrawings;
+    const objects = (types: number[]) => readBiffFormatting(biffStream({ ...SIMPLE, sheets: [{ name: 'S', cells: [], objects: types }] }))?.readSheet(0).hasDrawings;
     assert.equal(objects([]), false);
     assert.equal(objects([0x19]), false);
     assert.equal(objects([0x19, 0x08]), true);

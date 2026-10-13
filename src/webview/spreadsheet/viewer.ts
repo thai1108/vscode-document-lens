@@ -225,8 +225,10 @@ class Session {
 
   private updateNotices(): void {
     const notices = [...this.workbook.notices, ...(this.sheet?.notices ?? [])];
-    if (this.grid?.rowsCut) {
-      notices.push('Zoom out to see the last rows of this sheet: at this zoom the grid would be taller than the view can show.');
+    const cut = this.grid?.cutOff;
+    if (cut?.rows || cut?.cols) {
+      const what = cut.rows && cut.cols ? 'rows and columns' : cut.rows ? 'rows' : 'columns';
+      notices.push(`Zoom out to see the last ${what} of this sheet: at this zoom the grid would be larger than the view can show.`);
     }
     if (this.sheet?.kind === 'macrosheet' || this.sheet?.kind === 'dialogsheet') {
       notices.push(`“${this.sheet.name}” is a ${this.sheet.kind === 'macrosheet' ? 'macro' : 'dialog'} sheet; only its cells are shown.`);

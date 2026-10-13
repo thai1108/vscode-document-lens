@@ -57,7 +57,7 @@ describe('sample.xlsx', () => {
     assert.equal(summary.rows.sizes.get(3), 60);
     assert.equal(summary.rows.sizes.get(10), 0, 'row 11 is hidden');
     assert.deepEqual(summary.merges, [{ top: 0, left: 0, bottom: 0, right: 3 }]);
-    assert.deepEqual(summary.frozen, { rows: 2, cols: 1 });
+    assert.deepEqual(summary.frozen, { rows: 2, cols: 1, top: 0, left: 0 });
     assert.deepEqual(summary.topLeft, { row: 2, col: 1 });
     assert.deepEqual(summary.activeCell, { row: 2, col: 1 });
     assert.deepEqual(summary.used, { rows: 15, cols: 6 });
@@ -128,7 +128,7 @@ describe('sample.xlsx', () => {
   it('reads the other sheets: inline strings, string formulas, no gridlines', async () => {
     const data = await workbook.loadSheet(1);
     assert.equal(data.cells.size, (DATA_ROWS + 1) * 6 + 4);
-    assert.deepEqual(data.frozen, { rows: 1, cols: 0 });
+    assert.deepEqual(data.frozen, { rows: 1, cols: 0, top: 0, left: 0 });
     assert.equal(inspect(workbook, data, 'B301').text, 'Product 300');
     assert.deepEqual([inspect(workbook, data, 'G2').text, inspect(workbook, data, 'G2').raw], ['1-Product 1', '=A2&"-"&B2']);
     assert.equal(inspect(workbook, data, 'A1').format.fill, '#b9cde5', 'theme accent1 with a 60% tint');

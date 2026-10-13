@@ -1,7 +1,7 @@
 // xl/styles.xml (cell formats: fonts, fills, borders, alignment, number formats) and the theme colors they refer to.
 import { SHEET_LIMITS } from '../limits.ts';
 import { DEFAULT_THEME, defaultPalette, mixColors, parseHexColor, resolveColor, type ColorContext, type ColorSpec } from '../model/colors.ts';
-import { builtinFormat } from '../model/numberFormat.ts';
+import { builtinFormat, formatCode } from '../model/numberFormat.ts';
 import { DEFAULT_FONT, defaultFormat, type BorderEdge, type BorderStyle, type Borders, type CellFormat, type Font, type HorizontalAlignment, type VerticalAlignment } from '../model/types.ts';
 import { scanXml, type XmlTag } from './xml.ts';
 
@@ -131,7 +131,7 @@ export function parseStyles(xml: string, theme: readonly string[] = DEFAULT_THEM
             const id = intAttr(tag, 'numFmtId');
             const code = tag.attr('formatCode');
             if (id !== undefined && code !== undefined) {
-              numberFormats.set(id, code);
+              numberFormats.set(id, formatCode(code));
             }
           }
           return;

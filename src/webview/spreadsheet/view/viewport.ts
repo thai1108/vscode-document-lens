@@ -52,6 +52,17 @@ export function scrollingSpan(view: AxisView, scroll: number, viewport: number, 
   };
 }
 
+/**
+ * How many of the first `count` entries fit on a canvas at most `maxPx` long (header included) at `zoom`: all of
+ * them, or those that end before the limit.
+ */
+export function countThatFits(axis: Axis, count: number, header: number, zoom: number, maxPx: number): number {
+  if (header + axis.start(count) * zoom <= maxPx) {
+    return count;
+  }
+  return axis.indexAt((maxPx - header) / zoom, count);
+}
+
 export function contains(outer: Span, inner: Span): boolean {
   return inner.last < inner.first || (outer.first <= inner.first && outer.last >= inner.last);
 }

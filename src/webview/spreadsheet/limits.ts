@@ -19,8 +19,13 @@ export const SHEET_LIMITS = {
   maxLinks: 100_000,
   /** Rows with their own height or visibility. */
   maxRowEntries: 1_048_576,
-  /** One XML tag or text run; anything longer is not a spreadsheet part. */
-  maxXmlToken: 16 * 1024 * 1024,
+  /**
+   * One XML tag or text run. The longest legitimate ones are a cell's text (32,767 characters, a few times that with
+   * escapes) and a formula; anything this long is not a spreadsheet part.
+   */
+  maxXmlToken: 1024 * 1024,
+  /** `<col>` entries per sheet: one per column is the most a real file has. */
+  maxColumnRanges: 16_384,
   /** Rendered height of the grid; Chrome cannot lay out much taller elements (2^25 px). */
   maxCanvasPx: 30_000_000,
 } as const;

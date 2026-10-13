@@ -4,7 +4,8 @@ import { SHEET_LIMITS } from '../limits.ts';
 import type { CellRange, CellRef } from './address.ts';
 import { CellKind, CellStoreBuilder, NO_FORMULA, type CellStore } from './cells.ts';
 import { shiftFormula } from './formula.ts';
-import type { AxisSizes, CellFormat, Hyperlink, RichRun, Sheet, SheetKind } from './types.ts';
+import { RangeIndex } from './rangeIndex.ts';
+import { NO_FROZEN_PANES, type AxisSizes, type CellFormat, type FrozenPanes, type Hyperlink, type RichRun, type Sheet, type SheetKind } from './types.ts';
 
 export interface SheetBuilderOptions {
   /** Cells kept before the rest of the sheet is cut off. */
@@ -17,7 +18,7 @@ export interface SheetBuilderOptions {
 export interface SheetLayout {
   rows: AxisSizes;
   cols: AxisSizes;
-  frozen?: { rows: number; cols: number };
+  frozen?: FrozenPanes;
   topLeft?: CellRef;
   activeCell?: CellRef;
   showGridLines?: boolean;
@@ -28,7 +29,9 @@ export interface SheetLayout {
 export class SheetBuilder {
   readonly name: string;
   readonly kind: SheetKind;
-  readonly merges: CellRange[] = [];
+  /** Merged ranges, in file order; a range overlapping an earlier one is dropped. */
+  private readonly mergeIndex = new RangeIndex<CellRange>((range) => range);
+  private readonly merges: CellRange[] = [];
   readonly links: Hyperlink[] = [];
   /** Created with the first cell, so a size hint can still arrive before it. */
   private cells: CellStoreBuilder | undefined;
@@ -114,8 +117,9 @@ export class SheetBuilder {
     return true;
   }
 
+  /** A merged range; ignored when it is a single cell or overlaps an earlier one, as Excel repairs such files. */
   addMerge(range: CellRange): void {
-    if (this.merges.length < SHEET_LIMITS.maxMerges && (range.top !== range.bottom || range.left !== range.right)) {
+    if (this.merges.length < SHEET_LIMITS.maxMerges && (range.top !== range.bottom || range.left !== range.right) && this.mergeIndex.addIfFree(range)) {
       this.merges.push(range);
     }
   }
@@ -158,7 +162,7 @@ export class SheetBuilder {
       used: { rows: usedRows, cols: usedCols },
       merges: this.merges,
       links: this.links,
-      frozen: layout.frozen ?? { rows: 0, cols: 0 },
+      frozen: layout.frozen ?? NO_FROZEN_PANES,
       ...(layout.topLeft ? { topLeft: layout.topLeft } : {}),
       ...(layout.activeCell ? { activeCell: layout.activeCell } : {}),
       showGridLines: layout.showGridLines ?? true,

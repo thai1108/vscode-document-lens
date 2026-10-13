@@ -2,12 +2,13 @@
 // back, and moving the selection over it.
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import type { CellRange } from '../../../src/webview/spreadsheet/model/address.ts';
 import { CellKind, NO_FORMULA } from '../../../src/webview/spreadsheet/model/cells.ts';
 import { readCell } from '../../../src/webview/spreadsheet/model/display.ts';
+import { RangeIndex } from '../../../src/webview/spreadsheet/model/rangeIndex.ts';
 import { emptySheet, SheetBuilder } from '../../../src/webview/spreadsheet/model/sheet.ts';
 import { defaultFormat, EMPTY_STRINGS, type Sheet, type Workbook } from '../../../src/webview/spreadsheet/model/types.ts';
 import { Axis } from '../../../src/webview/spreadsheet/view/axis.ts';
-import { MergeIndex } from '../../../src/webview/spreadsheet/view/merges.ts';
 import { CellSelection, type NavigationBounds } from '../../../src/webview/spreadsheet/view/selection.ts';
 
 const FORMATS = [defaultFormat(), { ...defaultFormat(), fill: '#ffff00' }, { ...defaultFormat(), numberFormat: '0.0%' }];
@@ -97,7 +98,7 @@ describe('CellSelection', () => {
   const rows = new Axis({ defaultSize: 20, sizes: new Map([[2, 0]]) }, 1_048_576);
   const cols = new Axis({ defaultSize: 64, sizes: new Map() }, 16_384);
   const bounds: NavigationBounds = { rows, cols, rowCount: 100, colCount: 30, lastRow: 49, lastCol: 9, page: 10, origin: { row: 1, col: 0 } };
-  const selection = () => new CellSelection(new MergeIndex([{ top: 3, left: 0, bottom: 4, right: 1 }]));
+  const selection = () => new CellSelection(new RangeIndex((range: CellRange) => range, [{ top: 3, left: 0, bottom: 4, right: 1 }]));
 
   it('selects cells by row and column, a merged cell as a whole', () => {
     const cells = selection();

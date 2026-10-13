@@ -33,6 +33,45 @@ export function pointsToPx(points: number): number {
   return (points * 4) / 3;
 }
 
+/** Columns `first`..`last` (inclusive) and their size. */
+export type SizeRange = readonly [first: number, last: number, size: number];
+
+/**
+ * The sizes ranges give entries 0..limit-1, later ranges winning where they overlap. Each entry is set once, however
+ * many (full-width) ranges a file repeats.
+ */
+export function sizesFromRanges(ranges: readonly SizeRange[], limit: number): Map<number, number> {
+  const sizes = new Float64Array(limit).fill(Number.NaN);
+  // next[i] is the first entry at or after i not set yet (path-compressed as entries are set).
+  const next = Int32Array.from({ length: limit + 1 }, (_value, i) => i);
+  const find = (index: number): number => {
+    let root = index;
+    while (root < limit && next[root] !== root) {
+      root = next[root] ?? limit;
+    }
+    for (let i = index; i < root; ) {
+      const following = next[i] ?? limit;
+      next[i] = root;
+      i = following;
+    }
+    return root;
+  };
+  for (let k = ranges.length - 1; k >= 0; k--) {
+    const [first, last, size] = ranges[k] ?? [0, -1, 0];
+    for (let i = find(Math.max(0, first)); i <= Math.min(last, limit - 1); i = find(i + 1)) {
+      sizes[i] = size;
+      next[i] = i + 1;
+    }
+  }
+  const result = new Map<number, number>();
+  sizes.forEach((size, i) => {
+    if (!Number.isNaN(size)) {
+      result.set(i, size);
+    }
+  });
+  return result;
+}
+
 /** Excel's row height for a font when the file does not say: 15pt for Calibri 11, 18.75pt for Yu Gothic 11. */
 export function defaultRowHeightPt(font: Font): number {
   return (/游|yu gothic|meiryo|メイリオ/i.test(font.name) ? 18.75 : 15) * (font.size / 11);

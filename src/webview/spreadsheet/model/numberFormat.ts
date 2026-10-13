@@ -76,44 +76,87 @@ function defaultLocale(): string {
   return typeof navigator === 'undefined' ? 'en' : navigator.language;
 }
 
+/** Excel refuses longer format codes; a longer one in a file is shown as General. */
+export const MAX_FORMAT_CODE_LENGTH = 255;
+
+/** A format code as read from a file: within Excel's limit, or else General. */
+export function formatCode(code: string): string {
+  return code.length > MAX_FORMAT_CODE_LENGTH ? 'General' : code;
+}
+
 export interface FormattedValue {
   text: string;
   /** Color from a `[Red]`-style section code. */
   color?: string;
 }
 
-const isDateCache = new Map<string, boolean>();
-
-export function isDateFormat(format: string): boolean {
-  const cached = isDateCache.get(format);
-  if (cached !== undefined) {
-    return cached;
-  }
-  let result = hasJapaneseDateCodes(format);
-  try {
-    result ||= SSF.is_date(format) === true;
-  } catch {
-    // An unreadable format is not a date format.
-  }
-  if (isDateCache.size > 10_000) {
-    isDateCache.clear();
-  }
-  isDateCache.set(format, result);
-  return result;
+interface Section {
+  color?: string;
+  condition?: (value: number) => boolean;
 }
 
-export function formatNumber(value: number, format: string, date1904: boolean): FormattedValue {
-  const color = sectionColor(format, value);
-  let code = hasJapaneseDateCodes(format) ? expandJapaneseDateCodes(format, value, date1904) : format;
+/** What is worked out once per format code; formatting a cell then only picks a section and calls SSF. */
+interface CompiledFormat {
+  date: boolean;
+  /** Has Japanese era or weekday codes, which depend on the value and are filled in per cell. */
+  japanese: boolean;
+  /** The code handed to SSF (locale tags removed, date dots quoted); unused when `japanese`. */
+  code: string;
+  sections: Section[];
+}
+
+const COMPILED_CACHE_SIZE = 10_000;
+const compiledFormats = new Map<string, CompiledFormat>();
+
+function compile(format: string): CompiledFormat {
+  let compiled = compiledFormats.get(format);
+  if (!compiled) {
+    const japanese = hasJapaneseDateCodes(format);
+    let date = japanese;
+    try {
+      date ||= SSF.is_date(format) === true;
+    } catch {
+      // An unreadable format is not a date format.
+    }
+    const sections =
+      format.indexOf('[') < 0
+        ? []
+        : splitSections(format).map((section): Section => {
+            const condition = sectionCondition(section);
+            const color = colorCode(section);
+            return { ...(condition ? { condition } : {}), ...(color ? { color } : {}) };
+          });
+    compiled = { date, japanese, code: japanese ? format : ssfCode(format, date), sections };
+    if (compiledFormats.size >= COMPILED_CACHE_SIZE) {
+      compiledFormats.clear();
+    }
+    compiledFormats.set(format, compiled);
+  }
+  return compiled;
+}
+
+/** An Excel format code in the form SSF reads the same way. */
+function ssfCode(format: string, date: boolean): string {
   // A locale tag without a currency symbol ([$-411]) only selects the calendar; SSF would print its "$".
-  code = code.replace(/\[\$-[0-9A-Za-z-]+\]/g, '');
-  if (code.includes('.') && isDateFormat(format)) {
+  let code = format.replace(/\[\$-[0-9A-Za-z-]+\]/g, '');
+  if (date && code.includes('.')) {
     // In a date a dot is a separator (2024.1.15) unless it starts fractional seconds (ss.00); SSF only knows the latter.
     code = code.replace(/"[^"]*"|\\.|\[[^\]]*\]|\.(?!0)/g, (token) => (token === '.' ? '"."' : token));
   }
+  return code;
+}
+
+export function isDateFormat(format: string): boolean {
+  return compile(formatCode(format)).date;
+}
+
+export function formatNumber(value: number, format: string, date1904: boolean): FormattedValue {
+  const code = formatCode(format);
+  const compiled = compile(code);
+  const color = pickSection(compiled, value)?.color;
   let text: string;
   try {
-    text = SSF.format(code, value, { date1904 });
+    text = SSF.format(compiled.japanese ? ssfCode(expandJapaneseDateCodes(code, value, date1904), true) : compiled.code, value, { date1904 });
   } catch {
     text = generalNumber(value);
   }
@@ -122,7 +165,8 @@ export function formatNumber(value: number, format: string, date1904: boolean): 
 
 /** Text cells only use a format's fourth section (or a lone `@` section). */
 export function formatText(text: string, format: string): FormattedValue {
-  const sections = splitSections(format);
+  const code = formatCode(format);
+  const sections = splitSections(code);
   const section = sections.length >= 4 ? sections[3] : sections.length === 1 && sections[0]?.includes('@') ? sections[0] : undefined;
   if (section === undefined) {
     return { text };
@@ -130,7 +174,7 @@ export function formatText(text: string, format: string): FormattedValue {
   const color = colorCode(section);
   let formatted = text;
   try {
-    formatted = SSF.format(format, text);
+    formatted = SSF.format(code, text);
   } catch {
     // Keep the plain text.
   }
@@ -206,22 +250,21 @@ const NAMED_COLORS: Record<string, string> = {
 
 /** The color code of the section Excel picks for `value`, e.g. red for negatives in `#,##0;[Red]-#,##0`. */
 export function sectionColor(format: string, value: number): string | undefined {
-  if (format.indexOf('[') < 0) {
+  return pickSection(compile(formatCode(format)), value)?.color;
+}
+
+function pickSection(compiled: CompiledFormat, value: number): Section | undefined {
+  const sections = compiled.sections;
+  if (!sections.length) {
     return undefined;
   }
-  const sections = splitSections(format);
-  const conditions = sections.map(sectionCondition);
-  let section: string | undefined;
-  if (conditions.some((condition) => condition !== undefined)) {
-    section = sections.find((_text, i) => conditions[i]?.(value)) ?? sections.find((_text, i) => !conditions[i] && i < 3);
-  } else if (sections.length === 1 || (sections.length === 2 && value >= 0) || (sections.length >= 3 && value > 0)) {
-    section = sections[0];
-  } else if (value < 0) {
-    section = sections[1];
-  } else {
-    section = sections[2];
+  if (sections.some((section) => section.condition)) {
+    return sections.find((section) => section.condition?.(value)) ?? sections.find((section, i) => !section.condition && i < 3);
   }
-  return section === undefined ? undefined : colorCode(section);
+  if (sections.length === 1 || (sections.length === 2 && value >= 0) || (sections.length >= 3 && value > 0)) {
+    return sections[0];
+  }
+  return value < 0 ? sections[1] : sections[2];
 }
 
 function colorCode(section: string): string | undefined {
@@ -280,24 +323,11 @@ const ERAS = [
 ] as const;
 const WEEKDAYS = ['日', '月', '火', '水', '木', '金', '土'];
 
-const japaneseCodesCache = new Map<string, boolean>();
-
 function hasJapaneseDateCodes(format: string): boolean {
-  let result = japaneseCodesCache.get(format);
-  if (result === undefined) {
-    const bare = stripLiterals(format).replace(/general/gi, '');
-    const japaneseLocale = /\[\$-(?:411|ja-JP)\]/i.test(format);
-    result = /g/i.test(bare) || /aaa/.test(bare) || (japaneseLocale && /e/i.test(bare) && /[dmy]/i.test(bare) && !/e[+-]/i.test(bare));
-    if (japaneseCodesCache.size > 10_000) {
-      japaneseCodesCache.clear();
-    }
-    japaneseCodesCache.set(format, result);
-  }
-  return result;
-}
-
-function stripLiterals(format: string): string {
-  return format.replace(/"[^"]*"|\\.|\[[^\]]*\]/g, '');
+  const bare = format.replace(/"[^"]*"|\\.|\[[^\]]*\]/g, '').replace(/general/gi, '');
+  const japaneseLocale = /\[\$-(?:411|ja-JP)\]/i.test(format);
+  // Under a Japanese locale `e` is the era year, unless it is a scientific exponent (0.00E+00).
+  return /g/i.test(bare) || /aaa/.test(bare) || (japaneseLocale && /e/i.test(bare) && !/e[+-]/i.test(bare));
 }
 
 function expandJapaneseDateCodes(format: string, value: number, date1904: boolean): string {

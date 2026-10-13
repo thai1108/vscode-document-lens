@@ -5,8 +5,8 @@
 import { SHEET_LIMITS } from '../limits.ts';
 import type { CellRef } from '../model/address.ts';
 import { defaultPalette, mixColors } from '../model/colors.ts';
-import { builtinFormat } from '../model/numberFormat.ts';
-import { DEFAULT_FONT, defaultFormat, type BorderEdge, type BorderStyle, type Borders, type CellFormat, type Font, type HorizontalAlignment, type SheetKind, type VerticalAlignment } from '../model/types.ts';
+import { builtinFormat, formatCode } from '../model/numberFormat.ts';
+import { DEFAULT_FONT, defaultFormat, frozenPanes, NO_FROZEN_PANES, type BorderEdge, type BorderStyle, type Borders, type CellFormat, type Font, type FrozenPanes, type HorizontalAlignment, type SheetKind, type VerticalAlignment } from '../model/types.ts';
 
 const RECORD = {
   BOF: 0x0809,
@@ -72,12 +72,19 @@ export interface ColumnInfo {
   hidden: boolean;
 }
 
-export interface BiffSheet {
+/** A sheet as the workbook lists it (BOUNDSHEET); its own records are read by readSheet() when it is shown. */
+export interface BiffSheetEntry {
   name: string;
   hidden: boolean;
   kind: SheetKind;
+}
+
+/** The formatting of one sheet. */
+export interface BiffSheet {
   /** Format (XF index) of the cell at (row, col), or undefined. */
   formatAt(row: number, col: number): number | undefined;
+  /** Calls `visit` for each blank cell (BLANK/MULBLANK) with its format; SheetJS is not asked to make objects of them. */
+  forEachBlank(visit: (row: number, col: number, format: number) => void): void;
   /** Row heights in points (0 for hidden rows). */
   rowHeights: Map<number, number>;
   columns: ColumnInfo[];
@@ -88,7 +95,7 @@ export interface BiffSheet {
   defaultRowHeight?: number;
   rowsHiddenByDefault: boolean;
   showGridLines: boolean;
-  frozen: { rows: number; cols: number };
+  frozen: FrozenPanes;
   topLeft?: CellRef;
   activeCell?: CellRef;
   /** Pictures, shapes, controls or charts, none of which the preview shows. */
@@ -98,9 +105,11 @@ export interface BiffSheet {
 export interface BiffWorkbook {
   formats: CellFormat[];
   defaultFont: Font;
-  sheets: BiffSheet[];
+  sheets: BiffSheetEntry[];
   /** Index of the sheet Excel shows first. */
   activeSheet: number;
+  /** Reads the formatting of sheet `index`; nothing is kept between calls. */
+  readSheet(index: number): BiffSheet;
 }
 
 interface XfRecord {
@@ -180,7 +189,9 @@ export function readBiffFormatting(stream: Uint8Array): BiffWorkbook | undefined
   const numberFormats = new Map<number, string>();
   const xfs: XfRecord[] = [];
   const palette = defaultPalette();
-  const boundSheets: { position: number; hidden: boolean; kind: SheetKind; name: string }[] = [];
+  // By stream position: several BOUNDSHEET records pointing at the same sheet data are one sheet (the last one's name
+  // wins, as in SheetJS), or a crafted file could make the same records be read again for every entry.
+  const boundSheets = new Map<number, BiffSheetEntry & { position: number }>();
   let activeSheet = 0;
 
   for (const [type, start, length] of reader.records(0)) {
@@ -218,7 +229,7 @@ export function readBiffFormatting(stream: Uint8Array): BiffWorkbook | undefined
         break;
       case RECORD.FORMAT:
         if (length >= 5) {
-          numberFormats.set(reader.u16(start), reader.string(start + 5, reader.u16(start + 2), (reader.u8(start + 4) & 1) === 1, end));
+          numberFormats.set(reader.u16(start), formatCode(reader.string(start + 5, reader.u16(start + 2), (reader.u8(start + 4) & 1) === 1, end)));
         }
         break;
       case RECORD.XF:
@@ -250,17 +261,19 @@ export function readBiffFormatting(stream: Uint8Array): BiffWorkbook | undefined
         }
         break;
       }
-      case RECORD.BOUNDSHEET:
-        if (length >= 8 && boundSheets.length < SHEET_LIMITS.maxSheets) {
+      case RECORD.BOUNDSHEET: {
+        const position = reader.u32(start);
+        if (length >= 8 && (boundSheets.size < SHEET_LIMITS.maxSheets || boundSheets.has(position))) {
           const kind = reader.u8(start + 5);
-          boundSheets.push({
-            position: reader.u32(start),
+          boundSheets.set(position, {
+            position,
             hidden: (reader.u8(start + 4) & 0x03) !== 0,
             kind: kind === 0 ? 'worksheet' : kind === 2 ? 'chartsheet' : 'macrosheet',
             name: reader.string(start + 8, reader.u8(start + 6), (reader.u8(start + 7) & 1) === 1, end),
           });
         }
         break;
+      }
     }
   }
 
@@ -295,8 +308,14 @@ export function readBiffFormatting(stream: Uint8Array): BiffWorkbook | undefined
   if (!formats.length) {
     formats.push(defaultFormat(defaultFont));
   }
-  const sheets = boundSheets.map((sheet) => ({ ...readSheetStream(reader, sheet.position), name: sheet.name, hidden: sheet.hidden, kind: sheet.kind }));
-  return { formats, defaultFont, sheets, activeSheet };
+  const entries = [...boundSheets.values()];
+  return {
+    formats,
+    defaultFont,
+    sheets: entries.map(({ name, hidden, kind }) => ({ name, hidden, kind })),
+    activeSheet,
+    readSheet: (index) => readSheetStream(reader, entries[index]?.position ?? -1),
+  };
 }
 
 function fillColor(xf: XfRecord, color: (index: number) => string | undefined): string | undefined {
@@ -308,25 +327,25 @@ function fillColor(xf: XfRecord, color: (index: number) => string | undefined): 
   return density === 1 ? foreground : mixColors(foreground, color(xf.background) ?? '#ffffff', density);
 }
 
-type SheetFormatting = Omit<BiffSheet, 'name' | 'hidden' | 'kind'>;
-
-function readSheetStream(reader: Reader, position: number): SheetFormatting {
+function readSheetStream(reader: Reader, position: number): BiffSheet {
   const cells = new CellFormats();
   const rowHeights = new Map<number, number>();
   const columns: ColumnInfo[] = [];
-  const sheet: SheetFormatting = {
+  const sheet: BiffSheet = {
     formatAt: () => undefined,
+    forEachBlank: () => undefined,
     rowHeights,
     columns,
     rowsHiddenByDefault: false,
     showGridLines: true,
-    frozen: { rows: 0, cols: 0 },
+    frozen: NO_FROZEN_PANES,
     hasDrawings: false,
   };
-  if (reader.u16(position) !== RECORD.BOF) {
+  if (position < 0 || reader.u16(position) !== RECORD.BOF) {
     return sheet;
   }
-  let frozenPanes = false;
+  let frozen = false;
+  let viewTopLeft: CellRef | undefined;
   let depth = 0;
   for (const [type, start, length] of reader.records(position)) {
     if (type === RECORD.BOF) {
@@ -348,7 +367,7 @@ function readSheetStream(reader: Reader, position: number): SheetFormatting {
     }
     if (SINGLE_CELL_RECORDS.has(type)) {
       if (length >= 6) {
-        cells.add(reader.u16(start), reader.u16(start + 2), reader.u16(start + 4));
+        cells.add(reader.u16(start), reader.u16(start + 2), reader.u16(start + 4), type === RECORD.BLANK);
       }
       continue;
     }
@@ -366,7 +385,7 @@ function readSheetStream(reader: Reader, position: number): SheetFormatting {
         const first = reader.u16(start + 2);
         const count = Math.floor((length - 6) / step);
         for (let i = 0; i < count; i++) {
-          cells.add(row, first + i, reader.u16(start + 4 + i * step));
+          cells.add(row, first + i, reader.u16(start + 4 + i * step), type === RECORD.MULBLANK);
         }
         break;
       }
@@ -382,7 +401,7 @@ function readSheetStream(reader: Reader, position: number): SheetFormatting {
         }
         break;
       case RECORD.COLINFO:
-        if (length >= 10 && columns.length < SHEET_LIMITS.maxCols) {
+        if (length >= 10 && columns.length < SHEET_LIMITS.maxColumnRanges) {
           columns.push({ first: reader.u16(start), last: reader.u16(start + 2), width: reader.u16(start + 4) / 256, hidden: (reader.u16(start + 8) & 0x01) !== 0 });
         }
         break;
@@ -406,17 +425,17 @@ function readSheetStream(reader: Reader, position: number): SheetFormatting {
         if (length >= 6) {
           const flags = reader.u16(start);
           sheet.showGridLines = (flags & 0x0002) !== 0;
-          frozenPanes = (flags & 0x0008) !== 0;
-          const top = reader.u16(start + 2);
-          const left = reader.u16(start + 4);
-          if (top || left) {
-            sheet.topLeft = { row: top, col: left };
+          frozen = (flags & 0x0008) !== 0;
+          viewTopLeft = { row: reader.u16(start + 2), col: reader.u16(start + 4) };
+          if (viewTopLeft.row || viewTopLeft.col) {
+            sheet.topLeft = viewTopLeft;
           }
         }
         break;
       case RECORD.PANE:
-        if (length >= 8 && frozenPanes) {
-          sheet.frozen = { rows: reader.u16(start + 2), cols: reader.u16(start) };
+        // Frozen rows and columns are counted from the view's top-left cell; the pane's is where scrolling starts.
+        if (length >= 8 && frozen) {
+          sheet.frozen = frozenPanes(reader.u16(start + 2), reader.u16(start), viewTopLeft, SHEET_LIMITS.maxRows, SHEET_LIMITS.maxCols);
           sheet.topLeft = { row: reader.u16(start + 4), col: reader.u16(start + 6) };
         }
         break;
@@ -427,17 +446,20 @@ function readSheetStream(reader: Reader, position: number): SheetFormatting {
         break;
     }
   }
-  sheet.formatAt = cells.lookup();
+  const lookup = cells.build();
+  sheet.formatAt = lookup.formatAt;
+  sheet.forEachBlank = lookup.forEachBlank;
   return sheet;
 }
 
-/** (row, col) → XF index, collected in record order and looked up by binary search. */
+/** (row, col) → XF index and whether the cell is blank, collected in record order and looked up by binary search. */
 class CellFormats {
   private keys: number[] = [];
   private formats: number[] = [];
+  private blanks: boolean[] = [];
   private sorted = true;
 
-  add(row: number, col: number, format: number): void {
+  add(row: number, col: number, format: number, blank: boolean): void {
     if (this.keys.length >= SHEET_LIMITS.maxCells) {
       return;
     }
@@ -448,32 +470,47 @@ class CellFormats {
     }
     this.keys.push(key);
     this.formats.push(format);
+    this.blanks.push(blank);
   }
 
-  lookup(): (row: number, col: number) => number | undefined {
+  build(): Pick<BiffSheet, 'formatAt' | 'forEachBlank'> {
     let keys = Float64Array.from(this.keys);
     let formats = Uint16Array.from(this.formats);
+    let blanks = Uint8Array.from(this.blanks, Number);
     if (!this.sorted) {
       const order = Array.from(keys.keys()).sort((a, b) => (keys[a] ?? 0) - (keys[b] ?? 0) || a - b);
       keys = Float64Array.from(order, (i) => keys[i] ?? 0);
       formats = Uint16Array.from(order, (i) => formats[i] ?? 0);
+      blanks = Uint8Array.from(order, (i) => blanks[i] ?? 0);
     }
     this.keys = [];
     this.formats = [];
-    return (row, col) => {
-      const key = row * SHEET_LIMITS.maxCols + col;
-      let low = 0;
-      let high = keys.length;
-      // The last of equal keys wins, as when a record is written twice.
-      while (low < high) {
-        const mid = (low + high) >>> 1;
-        if ((keys[mid] ?? 0) <= key) {
-          low = mid + 1;
-        } else {
-          high = mid;
+    this.blanks = [];
+    return {
+      formatAt(row, col) {
+        const key = row * SHEET_LIMITS.maxCols + col;
+        let low = 0;
+        let high = keys.length;
+        // The last of equal keys wins, as when a record is written twice.
+        while (low < high) {
+          const mid = (low + high) >>> 1;
+          if ((keys[mid] ?? 0) <= key) {
+            low = mid + 1;
+          } else {
+            high = mid;
+          }
         }
-      }
-      return low > 0 && keys[low - 1] === key ? formats[low - 1] : undefined;
+        return low > 0 && keys[low - 1] === key ? formats[low - 1] : undefined;
+      },
+      forEachBlank(visit) {
+        for (let i = 0; i < keys.length; i++) {
+          const key = keys[i] ?? 0;
+          // Only the last record for a cell counts.
+          if (blanks[i] && keys[i + 1] !== key) {
+            visit(Math.floor(key / SHEET_LIMITS.maxCols), key % SHEET_LIMITS.maxCols, formats[i] ?? 0);
+          }
+        }
+      },
     };
   }
 }

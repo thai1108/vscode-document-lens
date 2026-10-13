@@ -3,7 +3,6 @@
 import { SHEET_LIMITS } from '../limits.ts';
 import type { CellRange, CellRef } from '../model/address.ts';
 import type { Axis } from './axis.ts';
-import type { MergeIndex } from './merges.ts';
 
 /** What key navigation needs to know about the grid. */
 export interface NavigationBounds {
@@ -21,10 +20,10 @@ export interface NavigationBounds {
 }
 
 export class CellSelection {
-  private readonly merges: MergeIndex;
+  private readonly merges: { at(row: number, col: number): CellRange | undefined };
   private current: CellRange | undefined;
 
-  constructor(merges: MergeIndex) {
+  constructor(merges: { at(row: number, col: number): CellRange | undefined }) {
     this.merges = merges;
   }
 
@@ -49,21 +48,24 @@ export class CellSelection {
   /** The cell `key` moves the selection to, or undefined for keys that do not move it. Hidden rows and columns are skipped. */
   target(key: string, jump: boolean, bounds: NavigationBounds): CellRef | undefined {
     const current = this.current ?? { top: bounds.origin.row, left: bounds.origin.col, bottom: bounds.origin.row, right: bounds.origin.col };
+    // The first visible row and column: those before them may be hidden or scrolled out above a frozen pane.
+    const firstRow = step(bounds.rows, -1, 1, bounds.rowCount);
+    const firstCol = step(bounds.cols, -1, 1, bounds.colCount);
     switch (key) {
       case 'ArrowUp':
-        return { row: jump ? 0 : step(bounds.rows, current.top, -1, bounds.rowCount), col: current.left };
+        return { row: jump ? firstRow : step(bounds.rows, current.top, -1, bounds.rowCount), col: current.left };
       case 'ArrowDown':
         return { row: jump ? bounds.lastRow : step(bounds.rows, current.bottom, 1, bounds.rowCount), col: current.left };
       case 'ArrowLeft':
-        return { row: current.top, col: jump ? 0 : step(bounds.cols, current.left, -1, bounds.colCount) };
+        return { row: current.top, col: jump ? firstCol : step(bounds.cols, current.left, -1, bounds.colCount) };
       case 'ArrowRight':
         return { row: current.top, col: jump ? bounds.lastCol : step(bounds.cols, current.right, 1, bounds.colCount) };
       case 'PageUp':
-        return { row: Math.max(0, current.top - bounds.page), col: current.left };
+        return { row: Math.max(firstRow, current.top - bounds.page), col: current.left };
       case 'PageDown':
         return { row: Math.min(bounds.rowCount - 1, current.top + bounds.page), col: current.left };
       case 'Home':
-        return jump ? { row: 0, col: 0 } : { row: current.top, col: 0 };
+        return jump ? { row: firstRow, col: firstCol } : { row: current.top, col: firstCol };
       case 'End':
         return jump ? { row: bounds.lastRow, col: bounds.lastCol } : { row: current.top, col: bounds.lastCol };
       default:
@@ -72,12 +74,12 @@ export class CellSelection {
   }
 }
 
-/** The next visible entry from `from` in `direction`, or `from` at the edge. */
+/** The next visible entry from `from` in `direction`, or `from` at the edge (0 when there is none from -1). */
 function step(axis: Axis, from: number, direction: 1 | -1, count: number): number {
   for (let index = from + direction; index >= 0 && index < count; index += direction) {
     if (axis.size(index) > 0) {
       return index;
     }
   }
-  return from;
+  return Math.max(0, from);
 }

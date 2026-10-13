@@ -8,7 +8,7 @@ import { spreadsheetViewer } from '../../../src/webview/spreadsheet/viewer.ts';
 import type { ShellState } from '../../../src/webview/shell/vscodeApi.ts';
 import { GITHUB_URL, sampleXlsx } from '../../fixtures/xlsx.ts';
 import { sampleXls } from '../../fixtures/xls.ts';
-import { largeSheetValue, largeSheetXlsx } from '../../support/xlsxWriter.ts';
+import { cell, largeSheetValue, largeSheetXlsx, xlsxPackage } from '../../support/xlsxWriter.ts';
 import { bootShell, type FakeHost } from '../dom/env.ts';
 
 let host: FakeHost | undefined;
@@ -34,6 +34,14 @@ const grid = (shell: FakeHost) => shell.$<HTMLElement>('.dl-grid');
 function mouseDown(shell: FakeHost, clientX: number, clientY: number): void {
   grid(shell).dispatchEvent(new shell.window.MouseEvent('mousedown', { bubbles: true, button: 0, clientX, clientY }) as unknown as Event);
 }
+
+function scroll(shell: FakeHost, left: number, top: number): void {
+  grid(shell).scrollLeft = left;
+  grid(shell).scrollTop = top;
+  grid(shell).dispatchEvent(new shell.window.Event('scroll') as unknown as Event);
+}
+
+const oneSheet = (body: string, styles?: string) => new Uint8Array(xlsxPackage({ sheets: [{ name: 'S', body }], ...(styles ? { styles } : {}) }));
 
 async function tab(shell: FakeHost, name: string): Promise<void> {
   const button = [...shell.window.document.querySelectorAll('.dl-tab')].find((node) => node.textContent === name);
@@ -164,5 +172,51 @@ describe('spreadsheet viewer', () => {
     const shell = await open('broken.xlsx', new TextEncoder().encode('PK\u0003\u0004 not really a zip'));
     assert.match(shell.$('#error').textContent ?? '', /^Could not display broken\.xlsx: Not a ZIP archive/);
     assert.equal(shell.window.document.querySelector('.dl-sheet'), null);
+  });
+});
+
+describe('spreadsheet viewer with crafted sheets', () => {
+  it('draws one of many repeated merged cells', async () => {
+    const merges = '<mergeCell ref="A1:J40"/>'.repeat(20_000);
+    const shell = await open('merges.xlsx', oneSheet(`<sheetData><row r="1">${cell('A1', 'merged')}</row></sheetData><mergeCells>${merges}</mergeCells>`));
+    assert.equal(shell.window.document.querySelectorAll('.dl-merge').length, 1);
+  });
+
+  it('reaches the last row of a full-height merge, and asks to zoom out only when the grid gets too tall', async () => {
+    const shell = await open('tall.xlsx', oneSheet(`<sheetData><row r="1">${cell('A1', 'tall')}</row></sheetData><mergeCells><mergeCell ref="A1:B1048576"/></mergeCells>`));
+    assert.equal(shell.$('#notice').hidden, true, 'every row fits at 100%');
+    scroll(shell, 0, 1_048_576 * 20);
+    assert.ok(texts(shell, '.dl-row-header').includes('1048576'), 'the last row is drawn');
+    for (let i = 0; i < 5; i++) {
+      shell.key('+');
+    }
+    assert.equal(grid(shell).style.getPropertyValue('--dl-zoom'), '2');
+    assert.match(shell.$('#notice').textContent ?? '', /Zoom out to see the last rows of this sheet/);
+  });
+
+  it('freezes the rows from the top of the view, not from row 1', async () => {
+    const rows = Array.from({ length: 10 }, (_value, i) => `<row r="${i + 1}">${cell(`A${i + 1}`, `row ${i + 1}`)}</row>`).join('');
+    const view = '<sheetViews><sheetView workbookViewId="0" topLeftCell="A5"><pane ySplit="2" topLeftCell="A7" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>';
+    const shell = await open('frozen.xlsx', oneSheet(`${view}<sheetData>${rows}</sheetData>`));
+    assert.ok(grid(shell).classList.contains('dl-frozen-rows'));
+    const headers = texts(shell, '.dl-row-header');
+    assert.deepEqual(headers.slice(0, 4), ['5', '6', '7', '8']);
+    assert.ok(!headers.includes('4') && !texts(shell, '.dl-cell').includes('row 1'), 'rows scrolled out above the pane are not shown');
+    scroll(shell, 0, 0);
+    assert.deepEqual(texts(shell, '.dl-row-header').slice(0, 2), ['5', '6'], 'the frozen rows stay');
+  });
+
+  it('keeps text running over formatted blank cells after scrolling its own cell out of the window', async () => {
+    const blanks = Array.from({ length: 25 }, (_value, i) => `<c r="${String.fromCharCode(66 + i)}1" s="1"/>`).join('');
+    const styles =
+      '<fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts><fills count="1"><fill><patternFill patternType="none"/></fill></fills>' +
+      '<borders count="2"><border/><border><bottom style="thin"><color rgb="FF000000"/></bottom></border></borders>' +
+      '<cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/><xf numFmtId="0" fontId="0" fillId="0" borderId="1" applyBorder="1"/></cellXfs>';
+    const text = 'a heading that runs across the whole row';
+    const shell = await open('spill.xlsx', oneSheet(`<sheetData><row r="1">${cell('A1', text)}${blanks}</row><row r="2">${cell('CC2', 'far')}</row></sheetData>`, styles));
+    assert.ok(texts(shell, '.dl-cell').includes(text));
+    scroll(shell, 40 * 64, 0);
+    assert.ok(!texts(shell, '.dl-col-header').includes('A'), 'column A is out of the drawn window');
+    assert.ok(texts(shell, '.dl-cell').includes(text), 'its text is still drawn where it runs');
   });
 });

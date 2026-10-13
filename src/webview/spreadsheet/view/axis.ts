@@ -7,9 +7,11 @@ export class Axis {
   /** offsets[i] is the start of entry i, for i up to the last entry with its own size. */
   private readonly offsets: Float64Array;
 
-  constructor(sizes: AxisSizes, limit: number) {
+  /** Entries before `hiddenBefore` have no size: rows or columns scrolled out of view above or left of a frozen pane. */
+  constructor(sizes: AxisSizes, limit: number, hiddenBefore = 0) {
     this.defaultSize = Math.max(0, sizes.defaultSize);
-    let last = -1;
+    const hidden = Math.max(0, Math.min(hiddenBefore, limit));
+    let last = hidden - 1;
     for (const index of sizes.sizes.keys()) {
       if (index < limit && index > last) {
         last = index;
@@ -17,7 +19,7 @@ export class Axis {
     }
     this.offsets = new Float64Array(last + 2);
     for (let i = 0; i <= last; i++) {
-      const size = sizes.sizes.get(i);
+      const size = i < hidden ? 0 : sizes.sizes.get(i);
       this.offsets[i + 1] = (this.offsets[i] ?? 0) + (size === undefined ? this.defaultSize : Math.max(0, size));
     }
   }

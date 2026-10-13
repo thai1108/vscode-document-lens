@@ -6,8 +6,8 @@ import { parseCellRef, parseRange, type CellRef } from '../model/address.ts';
 import { CellKind, NO_FORMULA } from '../model/cells.ts';
 import type { ColorContext } from '../model/colors.ts';
 import { SheetBuilder } from '../model/sheet.ts';
-import { baseColumnWidthPx, columnWidthPx, defaultRowHeightPt, maxDigitWidth, pointsToPx } from '../model/sizes.ts';
-import type { CellFormat, Font, Hyperlink, Sheet, SheetKind } from '../model/types.ts';
+import { baseColumnWidthPx, columnWidthPx, defaultRowHeightPt, maxDigitWidth, pointsToPx, sizesFromRanges, type SizeRange } from '../model/sizes.ts';
+import { frozenPanes, type CellFormat, type Font, type Hyperlink, type Sheet, type SheetKind } from '../model/types.ts';
 import type { Relationship } from './relationships.ts';
 import { RichTextReader } from './strings.ts';
 import { boolAttr, intAttr } from './styles.ts';
@@ -38,14 +38,15 @@ export async function readWorksheet(chunks: AsyncIterable<string>, context: Work
   const sheet = new SheetBuilder(context.name, context.kind, formats, context.maxCells === undefined ? {} : { maxCells: context.maxCells });
   const digitWidth = maxDigitWidth(context.defaultFont);
   const rowSizes = new Map<number, number>();
-  const colSizes = new Map<number, number>();
+  const columnRanges: SizeRange[] = [];
 
   let defaultRowHeight: number | undefined;
   let rowsHiddenByDefault = false;
   let defaultColWidth: number | undefined;
   let baseColWidth = 8;
   let showGridLines = true;
-  let frozen = { rows: 0, cols: 0 };
+  /** Frozen rows and columns, counted from the view's top-left cell. */
+  let split = { rows: 0, cols: 0 };
   let viewTopLeft: CellRef | undefined;
   let paneTopLeft: CellRef | undefined;
   let activePane: string | undefined;
@@ -345,9 +346,9 @@ export async function readWorksheet(chunks: AsyncIterable<string>, context: Work
     if (!hidden && !(Number.isFinite(width) && width >= 0 && width <= 255)) {
       return;
     }
-    const size = hidden ? 0 : columnWidthPx(width, digitWidth);
-    for (let col = min - 1; col < Math.min(max, SHEET_LIMITS.maxCols); col++) {
-      colSizes.set(col, size);
+    // Kept as ranges and expanded once at the end: a file may repeat <col min="1" max="16384"> many times.
+    if (columnRanges.length < SHEET_LIMITS.maxColumnRanges) {
+      columnRanges.push([min - 1, Math.min(max, SHEET_LIMITS.maxCols) - 1, hidden ? 0 : columnWidthPx(width, digitWidth)]);
     }
   }
 
@@ -357,7 +358,7 @@ export async function readWorksheet(chunks: AsyncIterable<string>, context: Work
     if (state === 'frozen' || state === 'frozenSplit') {
       const cols = Number(tag.attr('xSplit') ?? 0);
       const rows = Number(tag.attr('ySplit') ?? 0);
-      frozen = {
+      split = {
         rows: Number.isInteger(rows) && rows > 0 ? Math.min(rows, SHEET_LIMITS.maxRows) : 0,
         cols: Number.isInteger(cols) && cols > 0 ? Math.min(cols, SHEET_LIMITS.maxCols) : 0,
       };
@@ -395,11 +396,12 @@ export async function readWorksheet(chunks: AsyncIterable<string>, context: Work
   }
   scanner.end();
 
-  const frozenPanes = frozen.rows > 0 || frozen.cols > 0;
-  const topLeft = frozenPanes ? paneTopLeft : viewTopLeft;
+  const frozen = frozenPanes(split.rows, split.cols, viewTopLeft, SHEET_LIMITS.maxRows, SHEET_LIMITS.maxCols);
+  // With frozen panes the pane's top-left cell is where the scrolling part starts.
+  const topLeft = frozen.rows > 0 || frozen.cols > 0 ? paneTopLeft : viewTopLeft;
   return sheet.build({
     rows: { defaultSize: rowsHiddenByDefault ? 0 : pointsToPx(defaultRowHeight ?? defaultRowHeightPt(context.defaultFont)), sizes: rowSizes },
-    cols: { defaultSize: defaultColWidth !== undefined ? columnWidthPx(defaultColWidth, digitWidth) : baseColumnWidthPx(baseColWidth, digitWidth), sizes: colSizes },
+    cols: { defaultSize: defaultColWidth !== undefined ? columnWidthPx(defaultColWidth, digitWidth) : baseColumnWidthPx(baseColWidth, digitWidth), sizes: sizesFromRanges(columnRanges, SHEET_LIMITS.maxCols) },
     frozen,
     showGridLines,
     ...(topLeft ? { topLeft } : {}),

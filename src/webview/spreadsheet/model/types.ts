@@ -83,6 +83,29 @@ export interface AxisSizes {
   sizes: ReadonlyMap<number, number>;
 }
 
+/**
+ * Frozen panes: `rows` rows from row `top` and `cols` columns from column `left` stay on screen. Rows above `top` and
+ * columns left of `left` were scrolled out of the frozen pane in Excel and are not shown: Excel counts the frozen rows
+ * from the sheet view's top-left cell, as LibreOffice's import also does.
+ */
+export interface FrozenPanes {
+  rows: number;
+  cols: number;
+  top: number;
+  left: number;
+}
+
+export const NO_FROZEN_PANES: FrozenPanes = { rows: 0, cols: 0, top: 0, left: 0 };
+
+/** Frozen panes of `rows` rows and `cols` columns in a view whose top-left cell is `viewTopLeft`. */
+export function frozenPanes(rows: number, cols: number, viewTopLeft: CellRef | undefined, maxRows: number, maxCols: number): FrozenPanes {
+  const top = rows > 0 ? (viewTopLeft?.row ?? 0) : 0;
+  const left = cols > 0 ? (viewTopLeft?.col ?? 0) : 0;
+  const rowsFit = rows > 0 && top + rows <= maxRows;
+  const colsFit = cols > 0 && left + cols <= maxCols;
+  return { rows: rowsFit ? rows : 0, cols: colsFit ? cols : 0, top: rowsFit ? top : 0, left: colsFit ? left : 0 };
+}
+
 export type SheetKind = 'worksheet' | 'chartsheet' | 'dialogsheet' | 'macrosheet';
 
 export interface SheetEntry {
@@ -105,7 +128,7 @@ export interface Sheet {
   readonly used: { rows: number; cols: number };
   readonly merges: readonly CellRange[];
   readonly links: readonly Hyperlink[];
-  readonly frozen: { rows: number; cols: number };
+  readonly frozen: FrozenPanes;
   /** First cell shown in the scrolling part of the sheet when it opens. */
   readonly topLeft?: CellRef;
   readonly activeCell?: CellRef;
