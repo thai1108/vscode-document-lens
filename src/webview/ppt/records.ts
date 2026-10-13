@@ -61,7 +61,10 @@ export interface PptRecord {
 
 const HEADER_SIZE = 8;
 
-/** Reads records from one stream, counting them against a budget shared by everything parsed from the file. */
+/**
+ * Reads records from one stream, counting them against a budget shared by everything parsed from the file. Other
+ * per-item loops over file data (e.g. shape property tables) spend from the same budget.
+ */
 export class RecordStream {
   readonly bytes: Uint8Array;
   private readonly view: DataView;
@@ -78,10 +81,7 @@ export class RecordStream {
     if (!Number.isInteger(offset) || offset < 0 || offset + HEADER_SIZE > Math.min(limit, this.bytes.byteLength)) {
       throw damaged('a record lies outside its stream');
     }
-    this.budget.records -= 1;
-    if (this.budget.records < 0) {
-      throw new PptError('too-complex', 'This .ppt file has too many records to preview');
-    }
+    this.spend(1);
     const versionAndInstance = this.view.getUint16(offset, true);
     const start = offset + HEADER_SIZE;
     const length = this.view.getUint32(offset + 4, true);
@@ -96,6 +96,14 @@ export class RecordStream {
       start,
       end: start + length,
     };
+  }
+
+  /** Counts `units` of work against the budget; a file that exhausts it is refused. */
+  spend(units: number): void {
+    this.budget.records -= units;
+    if (this.budget.records < 0) {
+      throw new PptError('too-complex', 'This .ppt file has too many records to preview');
+    }
   }
 
   /** The records inside a container, in order; trailing bytes too short for a header are ignored. */

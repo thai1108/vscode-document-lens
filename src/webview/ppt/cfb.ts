@@ -10,6 +10,9 @@ const END_OF_CHAIN = 0xfffffffe;
 const NO_STREAM = 0xffffffff;
 const ENTRY_STREAM = 2;
 const ENTRY_ROOT = 5;
+// [MS-CFB] fixes both; trusting other values would let a tiny mini sector turn a stream into millions of sectors.
+const MINI_SECTOR_SHIFT = 6;
+const MINI_STREAM_CUTOFF = 4096;
 
 export class CompoundFileError extends Error {}
 
@@ -33,8 +36,6 @@ export class CompoundFile {
   /** Sectors actually present in the file (a partial last sector counts). */
   private readonly sectorCount: number;
   private readonly fat: Uint32Array;
-  private readonly miniSectorSize: number;
-  private readonly miniStreamCutoff: number;
   private readonly firstMiniFatSector: number;
   private readonly miniFatSectorCount: number;
   private readonly entries: readonly DirectoryEntry[];
@@ -54,17 +55,14 @@ export class CompoundFile {
     }
     this.sectorSize = 1 << sectorShift;
     this.sectorCount = Math.ceil(Math.max(0, bytes.byteLength - this.sectorSize) / this.sectorSize);
-    const miniShift = u16(32);
-    if (miniShift < 1 || miniShift >= sectorShift) {
-      throw new CompoundFileError('compound file has an invalid mini sector size');
+    if (u16(32) !== MINI_SECTOR_SHIFT || u32(56) !== MINI_STREAM_CUTOFF) {
+      throw new CompoundFileError('compound file has an invalid mini stream layout');
     }
-    this.miniSectorSize = 1 << miniShift;
-    this.miniStreamCutoff = u32(56);
     this.firstMiniFatSector = u32(60);
     this.miniFatSectorCount = u32(64);
     this.fat = this.readFat(u32(44), u32(68), u32(72), header);
 
-    const directory = this.readSectors(this.fat, u32(48), limits.maxDirectoryEntries * DIRECTORY_ENTRY_SIZE, this.sectorSize, (sector) => this.sector(sector));
+    const directory = this.readSectors(this.fat, u32(48), limits.maxDirectoryEntries * DIRECTORY_ENTRY_SIZE, this.regular());
     const count = Math.floor(directory.byteLength / DIRECTORY_ENTRY_SIZE);
     const view = new DataView(directory.buffer, directory.byteOffset, directory.byteLength);
     const wideSizes = u16(26) >= 4;
@@ -111,17 +109,17 @@ export class CompoundFile {
     if (size > maxSize) {
       throw new CompoundFileError(`the ${name} stream is too large`);
     }
-    if (size >= this.miniStreamCutoff) {
-      return this.readSectors(this.fat, entry.start, size, this.sectorSize, (sector) => this.sector(sector));
+    if (size >= MINI_STREAM_CUTOFF) {
+      return this.readSectors(this.fat, entry.start, size, this.regular());
     }
     const mini = this.miniStream();
-    return this.readSectors(mini.fat, entry.start, size, this.miniSectorSize, (sector) => {
-      const offset = sector * this.miniSectorSize;
-      if (offset + this.miniSectorSize > mini.stream.byteLength) {
-        throw new CompoundFileError('compound file mini sector lies outside the mini stream');
-      }
-      return mini.stream.subarray(offset, offset + this.miniSectorSize);
-    });
+    const unit = 1 << MINI_SECTOR_SHIFT;
+    return this.readSectors(mini.fat, entry.start, size, { bytes: mini.stream, first: 0, unit, count: Math.floor(mini.stream.byteLength / unit) });
+  }
+
+  /** The file's own sectors; sector 0 starts right after the header sector. */
+  private regular(): SectorSource {
+    return { bytes: this.bytes, first: this.sectorSize, unit: this.sectorSize, count: this.sectorCount };
   }
 
   private find(name: string): DirectoryEntry | undefined {
@@ -150,9 +148,8 @@ export class CompoundFile {
   private miniStream(): { fat: Uint32Array; stream: Uint8Array } {
     if (!this.mini) {
       const root = this.entries[0];
-      const regular = (sector: number) => this.sector(sector);
-      const fat = this.readSectors(this.fat, this.firstMiniFatSector, this.miniFatSectorCount * this.sectorSize, this.sectorSize, regular);
-      const stream = root ? this.readSectors(this.fat, root.start, Math.min(root.size, this.bytes.byteLength), this.sectorSize, regular) : new Uint8Array();
+      const fat = this.readSectors(this.fat, this.firstMiniFatSector, this.miniFatSectorCount * this.sectorSize, this.regular());
+      const stream = root ? this.readSectors(this.fat, root.start, Math.min(root.size, this.bytes.byteLength), this.regular()) : new Uint8Array();
       this.mini = { fat: uint32Table(fat), stream };
     }
     return this.mini;
@@ -211,13 +208,16 @@ export class CompoundFile {
    * Follows a sector chain from `start` until `size` bytes are read or the chain ends (a chain shorter than its
    * stream's declared size gives a truncated stream). A sector that repeats means the chain loops.
    */
-  private readSectors(table: Uint32Array, start: number, size: number, unit: number, sectorAt: (sector: number) => Uint8Array): Uint8Array {
-    const wanted = Math.ceil(size / unit);
+  private readSectors(table: Uint32Array, start: number, size: number, source: SectorSource): Uint8Array {
+    const wanted = Math.ceil(size / source.unit);
     const chain: number[] = [];
     const seen = new Uint8Array(table.length);
     for (let sector = start; chain.length < wanted && sector !== END_OF_CHAIN; sector = table[sector] ?? END_OF_CHAIN) {
       if (sector >= table.length) {
         throw new CompoundFileError('compound file sector chain is broken');
+      }
+      if (sector >= source.count) {
+        throw new CompoundFileError('compound file sector lies outside the file');
       }
       if (seen[sector]) {
         throw new CompoundFileError('compound file sector chain loops');
@@ -225,21 +225,29 @@ export class CompoundFile {
       seen[sector] = 1;
       chain.push(sector);
     }
-    const length = Math.min(size, chain.length * unit);
-    const parts = chain.map(sectorAt);
-    // Sectors that follow each other in the file need no copy.
-    const first = parts[0];
-    const last = parts.at(-1);
-    if (first && last && first.buffer === this.bytes.buffer && last.buffer === this.bytes.buffer && isContiguous(chain)) {
-      const offset = first.byteOffset - this.bytes.byteOffset;
-      if (offset + length <= this.bytes.byteLength) {
-        return this.bytes.subarray(offset, offset + length);
-      }
+    const length = Math.min(size, chain.length * source.unit);
+    const offsetOf = (sector: number) => source.first + sector * source.unit;
+    // Sectors that follow each other need no copy.
+    const first = chain[0];
+    if (first !== undefined && isContiguous(chain) && offsetOf(first) + length <= source.bytes.byteLength) {
+      return source.bytes.subarray(offsetOf(first), offsetOf(first) + length);
     }
+    // A truncated last sector of the file reads as if padded with zeros.
     const out = new Uint8Array(length);
-    parts.forEach((part, i) => out.set(part.subarray(0, Math.min(unit, length - i * unit)), i * unit));
+    chain.forEach((sector, i) => {
+      const offset = offsetOf(sector);
+      out.set(source.bytes.subarray(offset, offset + Math.min(source.unit, length - i * source.unit)), i * source.unit);
+    });
     return out;
   }
+}
+
+/** Where sector n of a chain lives: `bytes[first + n * unit ...]`, for n below `count`. */
+interface SectorSource {
+  readonly bytes: Uint8Array;
+  readonly first: number;
+  readonly unit: number;
+  readonly count: number;
 }
 
 function isContiguous(chain: readonly number[]): boolean {

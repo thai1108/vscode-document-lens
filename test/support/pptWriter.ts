@@ -260,7 +260,7 @@ function shape(options: ShapeOptions): Buffer {
   const children = [
     atom(RECORD.FSP, u32(options.spid, SHAPE_FLAGS), options.type, 2),
     atom(RECORD.FOPT, Buffer.concat(properties.map(([id, value]) => Buffer.concat([u16(id), u32(value)]))), properties.length, 3),
-    atom(RECORD.ClientAnchor, i16(options.top, 432, 5328, options.top + (options.height ?? 720))),
+    anchor(options.top, options.top + (options.height ?? 720)),
   ];
   if (options.placeholder !== undefined) {
     children.push(container(RECORD.ClientData, [atom(RECORD.PlaceholderAtom, Buffer.concat([u32(options.placeholder.position), u8(options.placeholder.type, 0), u16(0)]))]));
@@ -269,6 +269,12 @@ function shape(options: ShapeOptions): Buffer {
     children.push(container(RECORD.ClientTextbox, options.textbox));
   }
   return container(RECORD.SpContainer, children);
+}
+
+/** OfficeArtClientAnchor: 16-bit top, left, right, bottom, or 32-bit ones when the shape lies beyond 16-bit range. */
+function anchor(top: number, bottom: number): Buffer {
+  const rect = [top, 432, 5328, bottom];
+  return atom(RECORD.ClientAnchor, bottom > 0x7fff ? Buffer.concat(rect.map((value) => u32(value))) : i16(...rect));
 }
 
 /** A text box shape with its text inside, at `top` (master units). */

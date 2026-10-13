@@ -168,9 +168,16 @@ function fieldsSize(masks: number, fields: readonly [number, number][]): number 
 export function toParagraphs(text: string, type: number, runs: readonly ParagraphRun[]): Paragraph[] {
   const title = textKind(type) === 'title';
   const paragraphs: Paragraph[] = [];
+  // Paragraphs and runs both advance through the text, so one forward pass pairs each paragraph with its run.
+  let runIndex = 0;
+  let runEnd = runs[0]?.count ?? 0;
   let offset = 0;
   for (const raw of text.split(PARAGRAPH_BREAK)) {
-    const run = runAt(runs, offset);
+    while (offset >= runEnd && runIndex < runs.length - 1) {
+      runIndex += 1;
+      runEnd += runs[runIndex]?.count ?? 0;
+    }
+    const run = runs[runIndex];
     offset += raw.length + 1;
     const clean = raw.replaceAll(LINE_BREAK, '\n').replace(CONTROL_CHARACTERS, '');
     if (!clean.trim()) {
@@ -183,15 +190,4 @@ export function toParagraphs(text: string, type: number, runs: readonly Paragrap
     });
   }
   return paragraphs;
-}
-
-function runAt(runs: readonly ParagraphRun[], offset: number): ParagraphRun | undefined {
-  let end = 0;
-  for (const run of runs) {
-    end += run.count;
-    if (offset < end) {
-      return run;
-    }
-  }
-  return runs.at(-1);
 }

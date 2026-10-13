@@ -80,9 +80,9 @@ function readPresentation(bytes: Uint8Array, limits: PptLimits): Presentation {
   if (file.has('EncryptedSummary')) {
     throw encrypted();
   }
-  const budget = { records: limits.maxRecords };
+  const budget: Budget = { records: limits.maxRecords, persistEntries: limits.maxPersistEntries };
   const document = new RecordStream(documentBytes, budget);
-  const { persist, documentOffset } = locateDocument(document, readCurrentUser(file, limits), limits);
+  const { persist, documentOffset } = locateDocument(document, readCurrentUser(file, limits), limits, budget);
   const container = document.at(documentOffset);
   const children = document.children(container);
   const warnings = new Set<string>();
@@ -93,8 +93,10 @@ function readPresentation(bytes: Uint8Array, limits: PptLimits): Presentation {
     pictures: picturesBytes && new RecordStream(picturesBytes, budget),
     blipStore: [],
     pictureCache: new Map(),
+    blipCache: new Map(),
     warnings,
     charsLeft: limits.maxTextChars,
+    paragraphsLeft: limits.maxParagraphs,
     picturesLeft: limits.maxPictures,
     pictureBytesLeft: limits.maxTotalPictureSize,
   };
@@ -171,15 +173,21 @@ function readCurrentUser(file: CompoundFile, limits: PptLimits): number | undefi
   return view.getUint32(16, true);
 }
 
+/** Work left for one file: records read (see RecordStream) and persist directory entries read. */
+interface Budget {
+  records: number;
+  persistEntries: number;
+}
+
 interface DocumentLocation {
   persist: Map<number, number>;
   documentOffset: number;
 }
 
-function locateDocument(document: RecordStream, currentEdit: number | undefined, limits: PptLimits): DocumentLocation {
+function locateDocument(document: RecordStream, currentEdit: number | undefined, limits: PptLimits, budget: Budget): DocumentLocation {
   if (currentEdit !== undefined) {
     try {
-      const chain = readEditChain(document, currentEdit, limits);
+      const chain = readEditChain(document, currentEdit, limits, budget);
       const session = chain.encryptRef === undefined ? undefined : chain.persist.get(chain.encryptRef);
       if (session !== undefined && isRecordAt(document, session, RT.CryptSession10Container)) {
         throw encrypted();
@@ -194,7 +202,7 @@ function locateDocument(document: RecordStream, currentEdit: number | undefined,
       }
     }
   }
-  const scan = scanTopLevel(document, limits);
+  const scan = scanTopLevel(document, budget);
   if (scan.encrypted) {
     throw encrypted();
   }
@@ -205,7 +213,7 @@ function locateDocument(document: RecordStream, currentEdit: number | undefined,
 }
 
 /** Follows the UserEditAtoms from the newest save back, merging their persist directories (newer entries win). */
-function readEditChain(document: RecordStream, firstEdit: number, limits: PptLimits): { persist: Map<number, number>; documentRef: number; encryptRef?: number } {
+function readEditChain(document: RecordStream, firstEdit: number, limits: PptLimits, budget: Budget): { persist: Map<number, number>; documentRef: number; encryptRef?: number } {
   const persist = new Map<number, number>();
   const seen = new Set<number>();
   let newest: { documentRef: number; encryptRef?: number } | undefined;
@@ -226,7 +234,7 @@ function readEditChain(document: RecordStream, firstEdit: number, limits: PptLim
       documentRef: document.u32(atom.start + 16),
       encryptRef: atom.end - atom.start >= USER_EDIT_ENCRYPTED_SIZE ? document.u32(atom.start + 28) : undefined,
     };
-    readPersistDirectory(document, document.u32(atom.start + 12), persist, false, limits);
+    readPersistDirectory(document, document.u32(atom.start + 12), persist, false, budget);
     const previous = document.u32(atom.start + 8);
     if (previous === 0) {
       return { persist, ...newest };
@@ -235,7 +243,11 @@ function readEditChain(document: RecordStream, firstEdit: number, limits: PptLim
   }
 }
 
-function readPersistDirectory(document: RecordStream, offset: number, persist: Map<number, number>, overwrite: boolean, limits: PptLimits): void {
+/**
+ * Adds a PersistDirectoryAtom's entries to `persist`. Every entry read counts against the budget, repeats included:
+ * many saves can all point at the same large directory.
+ */
+function readPersistDirectory(document: RecordStream, offset: number, persist: Map<number, number>, overwrite: boolean, budget: Budget): void {
   const directory = document.at(offset);
   if (directory.type !== RT.PersistDirectoryAtom) {
     throw damaged('a persist directory is missing');
@@ -248,20 +260,21 @@ function readPersistDirectory(document: RecordStream, offset: number, persist: M
     if (position + count * 4 > directory.end) {
       throw damaged('a persist directory is truncated');
     }
+    budget.persistEntries -= count;
+    if (budget.persistEntries < 0) {
+      throw new PptError('too-complex', 'This .ppt file has too many objects to preview');
+    }
     for (let i = 0; i < count; i++) {
       if (overwrite || !persist.has(firstId + i)) {
         persist.set(firstId + i, document.u32(position + i * 4));
       }
-    }
-    if (persist.size > limits.maxPersistEntries) {
-      throw new PptError('too-complex', 'This .ppt file has too many objects to preview');
     }
     position += count * 4;
   }
 }
 
 /** Fallback for a broken edit chain: the last DocumentContainer in the stream and every persist directory in order. */
-function scanTopLevel(document: RecordStream, limits: PptLimits): { persist: Map<number, number>; documentOffset?: number; encrypted: boolean } {
+function scanTopLevel(document: RecordStream, budget: Budget): { persist: Map<number, number>; documentOffset?: number; encrypted: boolean } {
   const persist = new Map<number, number>();
   let documentOffset: number | undefined;
   let isEncrypted = false;
@@ -281,7 +294,7 @@ function scanTopLevel(document: RecordStream, limits: PptLimits): { persist: Map
       isEncrypted = true;
     } else if (record.type === RT.PersistDirectoryAtom) {
       try {
-        readPersistDirectory(document, offset, persist, true, limits);
+        readPersistDirectory(document, offset, persist, true, budget);
       } catch (error) {
         if (!isDamage(error)) {
           throw error;
@@ -329,9 +342,12 @@ interface Context {
   readonly pictures: RecordStream | undefined;
   /** OfficeArtBStoreContainer entries; a shape's pib property is a 1-based index into it. */
   blipStore: readonly PptRecord[];
+  /** Pictures by blip store index, and by the blip's location. */
   readonly pictureCache: Map<number, Picture>;
+  readonly blipCache: Map<string, Picture>;
   readonly warnings: Set<string>;
   charsLeft: number;
+  paragraphsLeft: number;
   picturesLeft: number;
   pictureBytesLeft: number;
 }
@@ -432,7 +448,13 @@ function decodeText(context: Context, record: PptRecord): string {
 
 function toBlock(context: Context, text: ListText): TextBlock {
   const runs = text.style ? paragraphRuns(context.document.data(text.style), text.text.length) : [];
-  return { kind: textKind(text.type), paragraphs: toParagraphs(text.text, text.type, runs) };
+  let paragraphs = toParagraphs(text.text, text.type, runs);
+  if (paragraphs.length > context.paragraphsLeft) {
+    context.warnings.add(`Only the first ${count(context.limits.maxParagraphs)} paragraphs are shown.`);
+    paragraphs = paragraphs.slice(0, context.paragraphsLeft);
+  }
+  context.paragraphsLeft -= paragraphs.length;
+  return { kind: textKind(text.type), paragraphs };
 }
 
 interface Anchor {
@@ -625,11 +647,11 @@ function readAnchor(document: RecordStream, record: PptRecord): Anchor | undefin
 
 /** The pib property (blip store index of the shape's picture) from an OfficeArtFOPT's property table. */
 function readPib(document: RecordStream, options: PptRecord): number {
-  for (let i = 0; i < options.instance; i++) {
+  const count = Math.min(options.instance, Math.floor((options.end - options.start) / 6));
+  // Up to 4,095 properties per table, and a slide can be listed many times: each property read counts as work.
+  document.spend(count);
+  for (let i = 0; i < count; i++) {
     const position = options.start + i * 6;
-    if (position + 6 > options.end) {
-      break;
-    }
     const id = document.u16(position);
     if ((id & PROPERTY_ID) === PROPERTY_PIB && !(id & PROPERTY_COMPLEX)) {
       return document.u32(position + 2);
@@ -639,28 +661,18 @@ function readPib(document: RecordStream, options: PptRecord): number {
 }
 
 function pictureAt(context: Context, index: number): Picture {
-  const cached = context.pictureCache.get(index);
-  if (cached) {
-    return cached;
-  }
-  let picture: Picture;
-  try {
-    picture = loadPicture(context, index);
-  } catch (error) {
-    if (!isDamage(error)) {
-      throw error;
+  let picture = context.pictureCache.get(index);
+  if (!picture) {
+    try {
+      picture = loadPicture(context, index);
+    } catch (error) {
+      if (!isDamage(error)) {
+        throw error;
+      }
+      picture = placeholder('unknown', 'Damaged picture (not shown)');
     }
-    picture = placeholder('unknown', 'Damaged picture (not shown)');
+    context.pictureCache.set(index, picture);
   }
-  if (picture.data) {
-    if (picture.data.byteLength > context.pictureBytesLeft) {
-      context.warnings.add('Some pictures are left out: the presentation holds too much picture data.');
-      picture = placeholder(picture.format, 'Picture left out (too much picture data)');
-    } else {
-      context.pictureBytesLeft -= picture.data.byteLength;
-    }
-  }
-  context.pictureCache.set(index, picture);
   return picture;
 }
 
@@ -673,7 +685,7 @@ function loadPicture(context: Context, index: number): Picture {
     return missing;
   }
   if (isBlip(entry)) {
-    return readBlip(document, entry, context.limits);
+    return blipAt(context, document, entry);
   }
   if (entry.type !== RT.FBSE) {
     return missing;
@@ -682,11 +694,29 @@ function loadPicture(context: Context, index: number): Picture {
   const embedded = entry.start + FBSE_FIXED_SIZE + document.u8(entry.start + 33);
   if (embedded + 8 <= entry.end) {
     const blip = document.at(embedded, entry.end);
-    return isBlip(blip) ? readBlip(document, blip, context.limits) : missing;
+    return isBlip(blip) ? blipAt(context, document, blip) : missing;
   }
   if (!pictures) {
     return missing;
   }
   const blip = pictures.at(document.u32(entry.start + 28));
-  return isBlip(blip) ? readBlip(pictures, blip, context.limits) : missing;
+  return isBlip(blip) ? blipAt(context, pictures, blip) : missing;
+}
+
+/** Each blip is read once, however many picture store entries point at it. */
+function blipAt(context: Context, stream: RecordStream, blip: PptRecord): Picture {
+  const key = `${stream === context.document ? 'document' : 'pictures'}:${blip.offset}`;
+  let picture = context.blipCache.get(key);
+  if (!picture) {
+    picture = readBlip(stream, blip, context.limits, (bytes) => {
+      if (bytes > context.pictureBytesLeft) {
+        context.warnings.add('Some pictures are left out: the presentation holds too much picture data.');
+        return false;
+      }
+      context.pictureBytesLeft -= bytes;
+      return true;
+    });
+    context.blipCache.set(key, picture);
+  }
+  return picture;
 }

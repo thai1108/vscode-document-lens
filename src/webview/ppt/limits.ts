@@ -10,8 +10,8 @@ export const PPT_LIMITS = {
   maxCurrentUserSize: 64 * 1024,
   /** UserEditAtoms followed back through the edit history (one per incremental save). */
   maxEdits: 10_000,
-  /** Persist object references collected from all persist directories. */
-  maxPersistEntries: 200_000,
+  /** Persist directory entries read across all saves; an entry repeated by several saves counts every time. */
+  maxPersistEntries: 500_000,
   /** Records visited while parsing one file. */
   maxRecords: 2_000_000,
   /** Container nesting (groups of groups of shapes); deeper content is left out. */
@@ -19,11 +19,13 @@ export const PPT_LIMITS = {
   maxSlides: 10_000,
   /** Characters of slide text kept across the whole presentation. */
   maxTextChars: 4_000_000,
+  /** Paragraphs shown across the whole presentation (each becomes an element on the page). */
+  maxParagraphs: 100_000,
   /** Picture elements shown across the whole presentation. */
   maxPictures: 2_000,
   /** One picture's data. */
   maxPictureSize: 64 * MB,
-  /** All distinct pictures' data together. */
+  /** Picture data examined (scanned, converted, shown) across the whole presentation, damaged pictures included. */
   maxTotalPictureSize: 256 * MB,
   /** Decoded size of one picture (width × height); bigger images are not handed to the browser's decoder. */
   maxPicturePixels: 100_000_000,

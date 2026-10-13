@@ -186,6 +186,33 @@ describe('CompoundFile with hostile files', () => {
     assert.throws(() => CompoundFile.open(bytes, LIMITS), /byte order/);
   });
 
+  it('refuses mini sector sizes and mini stream cutoffs other than the fixed 64 and 4096 bytes', () => {
+    const data = pattern(3000);
+    const valid = writeCompoundFile([{ name: 'Small', data }]);
+    assert.deepEqual(CompoundFile.open(plain(valid), LIMITS).stream('Small'), data);
+    for (const [offset, value, size] of [
+      [32, 1, 2],
+      [32, 7, 2],
+      [56, 0xffffffff, 4],
+      [56, 0, 4],
+      [56, 8192, 4],
+    ] as const) {
+      const bytes = Buffer.from(valid);
+      bytes.writeUIntLE(value, offset, size);
+      assert.throws(() => CompoundFile.open(plain(bytes), LIMITS), /invalid mini stream layout/, `header field at ${offset} = ${value}`);
+    }
+  });
+
+  it('refuses at once a file that would read its stream as millions of 2-byte mini sectors', () => {
+    // 2-byte mini sectors and a 4 GB cutoff made a 120 MB file use 2.4 GB of memory before these were checked.
+    const bytes = writeCompoundFile([{ name: 'PowerPoint Document', data: largePattern(4 * 1024 * 1024) }]);
+    bytes.writeUInt16LE(1, 32);
+    bytes.writeUInt32LE(0xffffffff, 56);
+    const started = performance.now();
+    assert.throws(() => CompoundFile.open(plain(bytes), LIMITS), /invalid mini stream layout/);
+    assert.ok(performance.now() - started < 100);
+  });
+
   it('refuses a directory without a root entry', () => {
     const bytes = writeCompoundFile([{ name: 'Data', data: pattern(10) }]);
     const directory = (bytes.readUInt32LE(48) + 1) * 512;

@@ -8,9 +8,9 @@ import { atom, u16, u32, u8 } from '../../support/pptWriter.ts';
 
 const UID = Buffer.alloc(16, 0xab);
 
-function blip(type: number, instance: number, body: Buffer, limits: PptLimits = PPT_LIMITS) {
+function blip(type: number, instance: number, body: Buffer, limits: PptLimits = PPT_LIMITS, examine: (bytes: number) => boolean = () => true) {
   const stream = new RecordStream(new Uint8Array(atom(type, body, instance)), { records: 10 });
-  return readBlip(stream, stream.at(0), limits);
+  return readBlip(stream, stream.at(0), limits, examine);
 }
 
 /** A bottom-up 2 × 2, 24-bit DIB (BITMAPINFOHEADER + rows padded to 4 bytes). */
@@ -91,6 +91,25 @@ describe('pictures', () => {
     bomb.writeUInt32BE(100_000, 16);
     bomb.writeUInt32BE(100_000, 20);
     assert.equal(blip(0xf01e, 0x6e0, Buffer.concat([UID, u8(0xff), bomb])).note, 'Picture too large to show (100000 × 100000)');
+  });
+
+  it('asks for the picture budget before scanning or converting the data', () => {
+    const asked: number[] = [];
+    const refuse = (bytes: number) => {
+      asked.push(bytes);
+      return false;
+    };
+    // A fake JPEG of fill bytes (its frame header would be searched for) and a DIB (it would be copied).
+    const jpeg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff]), Buffer.alloc(100_000, 0xff)]);
+    assert.equal(blip(0xf01d, 0x46a, Buffer.concat([UID, u8(0xff), jpeg]), PPT_LIMITS, refuse).note, 'Picture left out (too much picture data)');
+    assert.equal(blip(0xf01f, 0x7a8, Buffer.concat([UID, u8(0xff), dib()]), PPT_LIMITS, refuse).note, 'Picture left out (too much picture data)');
+    assert.deepEqual(asked, [jpeg.length, dib().length]);
+    // Placeholders and refused data cost nothing.
+    asked.length = 0;
+    blip(0xf01a, 0x3d4, Buffer.alloc(60), PPT_LIMITS, refuse);
+    blip(0xf01e, 0x6e0, Buffer.concat([UID, u8(0xff), Buffer.from('not a png')]), PPT_LIMITS, refuse);
+    blip(0xf01e, 0x6e0, Buffer.concat([UID, u8(0xff), rgbPng(4, 4, () => [0, 0, 0])]), { ...PPT_LIMITS, maxPictureSize: 10 }, refuse);
+    assert.deepEqual(asked, []);
   });
 
   it('reads image sizes from headers', () => {

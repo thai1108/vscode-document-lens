@@ -33,8 +33,11 @@ export function placeholder(format: PictureFormat, note: string): Picture {
   return { format, note };
 }
 
-/** The picture held by an OfficeArtBlip record. */
-export function readBlip(stream: RecordStream, blip: PptRecord, limits: PptLimits): Picture {
+/**
+ * The picture held by an OfficeArtBlip record. `examine` is asked for the data's size before anything scans or copies
+ * the data, and refuses once the presentation's picture budget is spent.
+ */
+export function readBlip(stream: RecordStream, blip: PptRecord, limits: PptLimits, examine: (bytes: number) => boolean): Picture {
   const metafile = METAFILES[blip.type];
   if (metafile) {
     return placeholder(metafile, `${metafile.toUpperCase()} picture (not shown)`);
@@ -57,6 +60,9 @@ export function readBlip(stream: RecordStream, blip: PptRecord, limits: PptLimit
   }
   if (raw.byteLength > limits.maxPictureSize) {
     return placeholder(format, 'Picture too large to show');
+  }
+  if (!examine(raw.byteLength)) {
+    return placeholder(format, 'Picture left out (too much picture data)');
   }
   const data = format === 'bmp' ? dibToBmp(raw) : raw;
   const size = data && imageSize(format, data);

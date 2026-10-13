@@ -332,25 +332,194 @@ describe('parsePresentation with files it cannot show', () => {
     );
     assertPptError(() => parsePresentation(new Uint8Array(bytes)), 'damaged', /This \.ppt file is damaged: compound file sector chain loops/);
   });
+});
 
-  it('never fails with anything but a PptError on corrupted bytes', () => {
-    const streams = pptStreams(SAMPLE_PPT);
-    let seed = 1;
-    const random = (limit: number) => {
-      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
-      return seed % limit;
-    };
-    for (let round = 0; round < 400; round++) {
-      const document = Buffer.from(streams.document);
-      for (let flips = 1 + random(8); flips > 0; flips--) {
-        document[random(document.length)] = random(256);
-      }
-      const truncated = round % 5 === 0 ? document.subarray(0, random(document.length)) : document;
-      try {
-        parsePresentation(fileOf({ ...streams, document: Buffer.from(truncated) }));
-      } catch (error) {
-        assert.ok(error instanceof PptError, `round ${round}: ${(error as Error).stack}`);
-      }
+/** Deterministic pseudo-random integers below `limit` (mulberry32, whose low bits are as random as the high ones). */
+function randomSource(seed: number): (limit: number) => number {
+  let state = seed >>> 0;
+  return (limit) => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let t = state;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return (((t ^ (t >>> 14)) >>> 0) / 2 ** 32) * limit >>> 0;
+  };
+}
+
+/** Overwrites 1–8 random bytes of `bytes` in [from, to). */
+function corrupt(bytes: Buffer, random: (limit: number) => number, from = 0, to = bytes.length): Buffer {
+  const copy = Buffer.from(bytes);
+  for (let flips = 1 + random(8); flips > 0; flips--) {
+    copy[from + random(to - from)] = random(256);
+  }
+  return copy;
+}
+
+/** Parses each corrupted file: it either opens or fails with a PptError, and no file takes long. */
+function fuzz(rounds: number, build: (random: (limit: number) => number, round: number) => Uint8Array): void {
+  const random = randomSource(rounds);
+  for (let round = 0; round < rounds; round++) {
+    const bytes = build(random, round);
+    const started = performance.now();
+    try {
+      parsePresentation(bytes);
+    } catch (error) {
+      assert.ok(error instanceof PptError, `round ${round}: ${(error as Error).stack}`);
     }
+    assert.ok(performance.now() - started < 2000, `round ${round} took ${Math.round(performance.now() - started)} ms`);
+  }
+}
+
+describe('parsePresentation on corrupted bytes', () => {
+  const streams = pptStreams(SAMPLE_PPT);
+
+  it('copes with a corrupted or truncated document stream', () => {
+    fuzz(400, (random, round) => {
+      const document = corrupt(streams.document, random);
+      return fileOf({ ...streams, document: round % 5 === 0 ? document.subarray(0, random(document.length)) : document });
+    });
+  });
+
+  it('copes with a corrupted compound file header', () => {
+    const file = Buffer.from(fileOf(streams));
+    // Mostly the fields after the signature: version, byte order, sector sizes, counts, first sectors, DIFAT.
+    fuzz(400, (random) => new Uint8Array(corrupt(file, random, 24, 80)));
+    fuzz(100, (random) => new Uint8Array(corrupt(file, random, 0, 512)));
+  });
+
+  it('copes with a corrupted Pictures stream', () => {
+    fuzz(200, (random) => fileOf({ ...streams, pictures: corrupt(streams.pictures, random, 0, 64) }));
+    fuzz(100, (random) => fileOf({ ...streams, pictures: corrupt(streams.pictures, random) }));
+  });
+
+  it('copes with a corrupted Current User stream', () => {
+    // Mostly the record header, token and edit offset; the rest is the user name.
+    fuzz(300, (random) => fileOf({ ...streams, currentUser: corrupt(streams.currentUser, random, 0, 28) }));
+    fuzz(100, (random) => fileOf({ ...streams, currentUser: corrupt(streams.currentUser, random) }));
+  });
+});
+
+/** Fails if `run` takes longer than `ms`; the hostile files below took seconds to minutes before their caps. */
+function within<T>(ms: number, run: () => T): T {
+  const started = performance.now();
+  const result = run();
+  const elapsed = performance.now() - started;
+  assert.ok(elapsed < ms, `took ${Math.round(elapsed)} ms (limit ${ms} ms)`);
+  return result;
+}
+
+/** Re-points every picture store entry of `format` at offset 0 of the Pictures stream. */
+function pointStoreEntriesAtFirstBlip(document: Buffer, storeType: number): number {
+  const header = Buffer.from([(storeType << 4) | 2, 0x00, 0x07, 0xf0]);
+  let patched = 0;
+  for (let at = document.indexOf(header); at >= 0; at = document.indexOf(header, at + 1)) {
+    document.writeUInt32LE(0, at + 8 + 28);
+    patched += 1;
+  }
+  return patched;
+}
+
+/** One big blip (`body` after a UID and tag) as the whole Pictures stream, shown by `count` store entries. */
+function sharedBlipFile(format: 'jpeg' | 'dib', count: number, body: Buffer): Uint8Array {
+  const placeholder = format === 'jpeg' ? Buffer.from([0xff, 0xd8, 0xff]) : Buffer.alloc(60);
+  const streams = pptStreams({
+    pictures: Array.from({ length: count }, () => ({ format, data: placeholder })),
+    slides: [{ pictures: Array.from({ length: count }, (_, i) => i + 1) }],
+  });
+  assert.equal(pointStoreEntriesAtFirstBlip(streams.document, format === 'jpeg' ? 5 : 7), count);
+  const blip = atom(format === 'jpeg' ? 0xf01d : 0xf01f, Buffer.concat([Buffer.alloc(16), Buffer.from([0xff]), body]), format === 'jpeg' ? 0x46a : 0x7a8);
+  return new Uint8Array(pptFile({ 'PowerPoint Document': streams.document, 'Current User': streams.currentUser, Pictures: blip }));
+}
+
+describe('parsePresentation against files built to waste time', () => {
+  it('counts every persist directory entry it reads, also when many saves share one directory', () => {
+    // 10,000 saves all pointing at one directory of 64 × 4,095 entries: 2.6 billion entries to read.
+    const parts: Buffer[] = [atom(0x0001, Buffer.alloc(0))];
+    const offsetOf = () => parts.reduce((sum, part) => sum + part.length, 0);
+    const documentOffset = offsetOf();
+    parts.push(container(0x03e8, [container(0x0ff0, [], 0)]));
+    const directoryOffset = offsetOf();
+    const group = Buffer.concat([u32(((4095 << 20) | 2) >>> 0), Buffer.alloc(4095 * 4)]);
+    parts.push(atom(0x1772, Buffer.concat([u32((1 << 20) | 1, documentOffset), ...Array.from({ length: 64 }, () => group)])));
+    let previous = 0;
+    for (let i = 0; i < 10_000; i++) {
+      const offset = offsetOf();
+      parts.push(atom(0x0ff5, Buffer.concat([u32(256), Buffer.from([0, 0, 0, 3]), u32(previous, directoryOffset, 1, 5000), Buffer.from([1, 0, 0, 0])])));
+      previous = offset;
+    }
+    const bytes = new Uint8Array(pptFile({ 'PowerPoint Document': Buffer.concat(parts), 'Current User': currentUserStream(previous) }));
+    within(1000, () => assertPptError(() => parsePresentation(bytes), 'too-complex', /too many objects/));
+  });
+
+  it('counts persist entries that a later save repeats', () => {
+    const options = { update: { spec: SAMPLE_PPT, persistIds: [1, slidePersistId(0)] } };
+    const first = pptStreams(SAMPLE_PPT, options);
+    const firstSave = first.document.readUInt32LE((first.edits[0] ?? 0) + 8 + 12);
+    const entries = first.document.readUInt32LE(firstSave + 8) >>> 20;
+    // The second save repeats two ids: they are read again.
+    assert.equal(parse(SAMPLE_PPT, options, { ...PPT_LIMITS, maxPersistEntries: entries + 2 }).slides.length, 3);
+    assertPptError(() => parse(SAMPLE_PPT, options, { ...PPT_LIMITS, maxPersistEntries: entries + 1 }), 'too-complex', /too many objects/);
+  });
+
+  it('pairs paragraphs with their style runs in one pass', () => {
+    // 200,000 one-letter paragraphs, one style run each.
+    const presentation = within(2000, () => parse({ slides: [{ textBoxes: [{ type: 'other', text: 'a\r'.repeat(200_000), bytes: true }] }] }));
+    assert.equal(presentation.slides[0]?.texts[0]?.paragraphs.length, PPT_LIMITS.maxParagraphs);
+    assert.deepEqual(presentation.warnings, ['Only the first 100,000 paragraphs are shown.']);
+  });
+
+  it('caps the paragraphs shown across the presentation', () => {
+    const presentation = parse(SAMPLE_PPT, {}, { ...PPT_LIMITS, maxParagraphs: 3 });
+    assert.deepEqual(texts(presentation.slides[0]), ['Quarterly review', '四半期レビュー / Document Lens sample']);
+    assert.deepEqual(texts(presentation.slides[1]), []);
+    assert.deepEqual(presentation.warnings, ['Only the first 3 paragraphs are shown.']);
+  });
+
+  it('examines a picture once however many store entries point at it', () => {
+    // 500 entries showing one 16 MB "JPEG" of fill bytes, whose frame header would be searched for each time.
+    const jpeg = sharedBlipFile('jpeg', 500, Buffer.concat([Buffer.from([0xff, 0xd8, 0xff]), Buffer.alloc(16 * 1024 * 1024, 0xff)]));
+    const pictures = within(2000, () => parsePresentation(jpeg)).slides[0]?.pictures ?? [];
+    assert.equal(pictures.length, 500);
+    assert.equal(new Set(pictures).size, 1);
+    assert.equal(pictures[0]?.note, 'Damaged picture (not shown)');
+
+    // The same with a 1 × 1 DIB followed by 16 MB, which would be copied each time.
+    const header = Buffer.concat([u32(40, 1, 1), Buffer.from([1, 0, 24, 0]), u32(0, 4, 0, 0, 0, 0)]);
+    const dib = sharedBlipFile('dib', 500, Buffer.concat([header, Buffer.alloc(16 * 1024 * 1024)]));
+    const shown = within(2000, () => parsePresentation(dib)).slides[0]?.pictures ?? [];
+    assert.equal(new Set(shown).size, 1);
+    assert.equal(shown[0]?.mime, 'image/bmp');
+  });
+
+  it('charges picture data to the budget before scanning or converting it, damaged pictures included', () => {
+    const fake = (fill: number) => Buffer.concat([Buffer.from([0xff, 0xd8, 0xff]), Buffer.alloc(100_000, fill)]);
+    const spec: PptSpec = {
+      pictures: [
+        { format: 'jpeg', data: fake(0xff) },
+        { format: 'jpeg', data: fake(0xfe) },
+        { format: 'png', data: rgbPng(2, 2, () => [0, 0, 0]) },
+      ],
+      slides: [{ pictures: [1, 2, 3] }],
+    };
+    const presentation = parse(spec, {}, { ...PPT_LIMITS, maxTotalPictureSize: 150_000 });
+    assert.deepEqual(
+      presentation.slides[0]?.pictures.map((picture) => picture.note),
+      ['Damaged picture (not shown)', 'Picture left out (too much picture data)', undefined],
+    );
+    assert.deepEqual(presentation.warnings, ['Some pictures are left out: the presentation holds too much picture data.']);
+  });
+
+  it('counts shape property tables as work, also when many slides point at the same slide', () => {
+    // 200 slide-list entries all pointing at one slide with 100 shapes of 4,095 properties each.
+    const properties = Buffer.alloc(4095 * 6);
+    for (let i = 0; i < 4095; i++) {
+      properties.writeUInt16LE(0x0181, i * 6);
+    }
+    const shape = container(0xf004, [atom(0xf00b, properties, 4095, 3)]);
+    const streams = pptStreams({ slides: [{ extraShapes: Array.from({ length: 100 }, () => shape) }, ...Array.from({ length: 199 }, () => ({}))] });
+    for (let i = 1; i < 200; i++) {
+      streams.document.writeUInt32LE(streams.offsets.get(slidePersistId(0)) ?? 0, persistEntryOffset(streams, slidePersistId(i)));
+    }
+    within(1000, () => assertPptError(() => parsePresentation(fileOf(streams)), 'too-complex', /too many records/));
   });
 });
