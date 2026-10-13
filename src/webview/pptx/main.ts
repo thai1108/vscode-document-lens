@@ -1,5 +1,6 @@
 import '../shell/shell.css';
+import './pptx.css';
 import { startViewer } from '../shell/app.ts';
-import { placeholderViewer } from '../shell/placeholder.ts';
+import { createPptxViewer } from './viewer.ts';
 
-startViewer(placeholderViewer('.pptx presentation'));
+startViewer(createPptxViewer());

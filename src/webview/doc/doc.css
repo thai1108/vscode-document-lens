@@ -1,0 +1,97 @@
+/* PAPER_WIDTH and PAPER_GUTTER in render.ts must match the paper's max-width and the canvas padding. */
+.doc-canvas {
+  padding: 24px;
+}
+
+.doc-paper {
+  max-width: 794px;
+  min-height: 200px;
+  margin: 0 auto;
+  padding: 56px min(72px, 8%);
+  background: #ffffff;
+  color: #1f1f1f;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+  font-family: system-ui, -apple-system, 'Segoe UI', 'Hiragino Sans', 'Hiragino Kaku Gothic ProN', 'Yu Gothic UI', Meiryo,
+    'Noto Sans CJK JP', sans-serif;
+  font-size: 15px;
+  line-height: 1.6;
+  overflow-wrap: break-word;
+  tab-size: 4;
+}
+
+.doc-p {
+  min-height: 1.6em;
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.doc-empty {
+  margin: 0;
+  color: #6b6b6b;
+  font-style: italic;
+}
+
+.doc-link {
+  color: #0b57d0;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.doc-note-ref {
+  font-size: 0.75em;
+  line-height: 0;
+}
+
+.doc-page-break {
+  position: relative;
+  margin: 28px 0;
+  border-top: 1px dashed #b5b5b5;
+}
+
+/* The label is generated so it stays out of find results and copied text. */
+.doc-page-break::after {
+  content: 'Page break';
+  position: absolute;
+  top: 0;
+  left: 50%;
+  padding: 0 8px;
+  transform: translate(-50%, -50%);
+  background: #ffffff;
+  color: #8a8a8a;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.doc-table-wrap {
+  margin: 8px 0;
+  overflow-x: auto;
+}
+
+.doc-table {
+  border-collapse: collapse;
+}
+
+.doc-table td {
+  min-width: 48px;
+  padding: 4px 8px;
+  border: 1px solid #bdbdbd;
+  vertical-align: top;
+}
+
+.doc-story {
+  margin-top: 32px;
+  padding-top: 12px;
+  border-top: 1px solid #d6d6d6;
+  font-size: 13px;
+}
+
+.doc-story-label {
+  margin: 0 0 8px;
+  color: #5f5f5f;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}

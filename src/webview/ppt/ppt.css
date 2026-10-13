@@ -1,0 +1,136 @@
+.ppt-deck {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 28px;
+  padding: 24px 24px 48px;
+}
+
+.ppt-no-slides {
+  margin: 48px 0;
+  color: var(--dl-dim);
+}
+
+.ppt-slide {
+  width: 100%;
+  max-width: 960px;
+}
+
+.ppt-slide-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 6px 2px;
+  color: var(--dl-dim);
+}
+
+.ppt-badge {
+  padding: 0 7px;
+  border: 1px solid var(--dl-warning-border);
+  border-radius: 9px;
+  color: var(--dl-fg);
+  background: var(--dl-warning-bg);
+  font-size: 0.9em;
+}
+
+/* A slide is a white page in both themes, at the presentation's aspect ratio (it grows when the text needs more). */
+.ppt-slide-card {
+  aspect-ratio: var(--ppt-aspect, 4 / 3);
+  padding: 4% 6%;
+  background: #ffffff;
+  color: #1f1f1f;
+  border-radius: 2px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+  font-family: system-ui, -apple-system, "Segoe UI", "Hiragino Sans", "Yu Gothic UI", Meiryo, sans-serif;
+  font-size: 16px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.ppt-slide-hidden .ppt-slide-card {
+  opacity: 0.6;
+  outline: 2px dashed var(--dl-warning-border);
+  outline-offset: 3px;
+}
+
+.ppt-title {
+  margin: 0 0 0.8em;
+  font-size: 1.75em;
+  font-weight: 600;
+  line-height: 1.25;
+  white-space: pre-wrap;
+}
+
+.ppt-text {
+  margin: 0 0 0.9em;
+}
+
+.ppt-text ul {
+  margin: 0;
+  padding-left: 1.3em;
+}
+
+.ppt-text p,
+.ppt-text li {
+  margin: 0 0 0.35em;
+  white-space: pre-wrap;
+}
+
+.ppt-text .ppt-level-1 {
+  margin-left: 1.5em;
+}
+
+.ppt-text .ppt-level-2 {
+  margin-left: 3em;
+}
+
+.ppt-text .ppt-level-3 {
+  margin-left: 4.5em;
+}
+
+.ppt-text .ppt-level-4 {
+  margin-left: 6em;
+}
+
+.ppt-pictures {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 12px;
+  margin-top: 1em;
+}
+
+.ppt-picture {
+  margin: 0;
+  max-width: 100%;
+}
+
+.ppt-picture img {
+  display: block;
+  max-width: 100%;
+  max-height: 360px;
+  width: auto;
+  height: auto;
+  border: 1px solid #e3e3e3;
+}
+
+.ppt-picture-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 180px;
+  min-height: 100px;
+  padding: 12px 16px;
+  border: 1px dashed #a8a8a8;
+  border-radius: 3px;
+  background: #f5f5f5;
+  color: #555555;
+  font-size: 0.85em;
+  text-align: center;
+}
+
+.ppt-note {
+  margin: 0.5em 0 0;
+  color: #6b6b6b;
+  font-style: italic;
+}

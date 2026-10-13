@@ -23,6 +23,12 @@ export const OOXML_ZIP_LIMITS = {
   maxCompressionRatio: 1100,
 };
 
+/**
+ * Most pages a PDF viewer lays out: it creates a placeholder per page, and a tiny file's page tree can claim any
+ * page count.
+ */
+export const MAX_PDF_PAGES = 50_000;
+
 /** Largest single XML part a viewer parses into a DOM (larger parts must be streamed or refused). */
 export const MAX_XML_PART_SIZE = 64 * MB;
 

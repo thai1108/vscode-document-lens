@@ -1,0 +1,44 @@
+/* The document rendered by docx-preview (render.ts). Its own style sheets are scoped to .dl-docx, inside the frame;
+   the rules here win over docx-preview's defaults by specificity. */
+.dl-docx-frame {
+  /* As wide as the widest page, so zooming in scrolls sideways instead of cutting pages off. */
+  width: max-content;
+  min-width: 100%;
+  /* Positioned or layered content from the document, even position: fixed on .dl-docx itself, stays inside the
+     document area. The document's style sheets cannot reach this element. */
+  contain: layout;
+}
+
+.dl-docx .docx-wrapper {
+  /* The gap matches PAGE_GAP in viewer.ts. */
+  padding: 24px 24px 0;
+  background: transparent;
+}
+
+.dl-docx .docx-wrapper > section.docx {
+  margin-bottom: 24px;
+  background: #ffffff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+}
+
+.dl-docx a[href] {
+  cursor: pointer;
+}
+
+.dl-docx-image-placeholder {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  min-width: 8em;
+  min-height: 2.5em;
+  max-width: 100%;
+  padding: 2px 6px;
+  overflow: hidden;
+  border: 1px dashed #8a8a8a;
+  background: #f3f3f3;
+  color: #5a5a5a;
+  font: 11px/1.3 system-ui, sans-serif;
+  text-align: center;
+  vertical-align: middle;
+}
