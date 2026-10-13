@@ -7,5 +7,6 @@ export const ppt: FormatDefinition = {
   extensions: ['.ppt'],
   maxFileSize: MAX_FILE_SIZE.ppt,
   webview: 'ppt',
+  findWidget: true,
   check: (bytes) => checkCompoundFile(bytes, '.ppt'),
 };
