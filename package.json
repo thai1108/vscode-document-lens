@@ -130,6 +130,9 @@
     "package": "pnpm check && vsce package --no-dependencies"
   },
   "packageManager": "pnpm@10.15.1",
+  "dependencies": {
+    "pdfjs-dist": "6.3.289"
+  },
   "devDependencies": {
     "@eslint/js": "10.0.1",
     "@playwright/test": "1.63.0",
@@ -146,7 +149,8 @@
   },
   "pnpm": {
     "overrides": {
-      "mocha>serialize-javascript": "7.1.2"
+      "mocha>serialize-javascript": "7.1.2",
+      "pdfjs-dist>@napi-rs/canvas": "-"
     }
   }
 }
