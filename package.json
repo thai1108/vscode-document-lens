@@ -1,0 +1,152 @@
+{
+  "name": "document-lens",
+  "displayName": "Document Lens",
+  "description": "Preview .pdf, .docx, .doc, .xlsx, .xls, .pptx and .ppt files inside VS Code: pages, sheets and slides, read-only and fully offline.",
+  "version": "0.0.1",
+  "publisher": "thai1108",
+  "icon": "media/icon.png",
+  "galleryBanner": {
+    "color": "#10243F",
+    "theme": "dark"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/thai1108/vscode-document-lens.git"
+  },
+  "homepage": "https://github.com/thai1108/vscode-document-lens#readme",
+  "bugs": {
+    "url": "https://github.com/thai1108/vscode-document-lens/issues"
+  },
+  "type": "module",
+  "engines": {
+    "vscode": "^1.140.0"
+  },
+  "categories": [
+    "Visualization",
+    "Other"
+  ],
+  "keywords": [
+    "pdf",
+    "docx",
+    "doc",
+    "xlsx",
+    "xls",
+    "pptx",
+    "ppt",
+    "preview",
+    "viewer",
+    "document",
+    "spreadsheet",
+    "presentation"
+  ],
+  "main": "./dist/extension.cjs",
+  "contributes": {
+    "customEditors": [
+      {
+        "viewType": "documentLens.pdf",
+        "displayName": "Document Lens",
+        "selector": [
+          {
+            "filenamePattern": "*.pdf"
+          }
+        ],
+        "priority": "default"
+      },
+      {
+        "viewType": "documentLens.docx",
+        "displayName": "Document Lens",
+        "selector": [
+          {
+            "filenamePattern": "*.docx"
+          }
+        ],
+        "priority": "default"
+      },
+      {
+        "viewType": "documentLens.doc",
+        "displayName": "Document Lens",
+        "selector": [
+          {
+            "filenamePattern": "*.doc"
+          }
+        ],
+        "priority": "default"
+      },
+      {
+        "viewType": "documentLens.xlsx",
+        "displayName": "Document Lens",
+        "selector": [
+          {
+            "filenamePattern": "*.xlsx"
+          }
+        ],
+        "priority": "default"
+      },
+      {
+        "viewType": "documentLens.xls",
+        "displayName": "Document Lens",
+        "selector": [
+          {
+            "filenamePattern": "*.xls"
+          }
+        ],
+        "priority": "default"
+      },
+      {
+        "viewType": "documentLens.pptx",
+        "displayName": "Document Lens",
+        "selector": [
+          {
+            "filenamePattern": "*.pptx"
+          }
+        ],
+        "priority": "default"
+      },
+      {
+        "viewType": "documentLens.ppt",
+        "displayName": "Document Lens",
+        "selector": [
+          {
+            "filenamePattern": "*.ppt"
+          }
+        ],
+        "priority": "default"
+      }
+    ]
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "typecheck": "tsc -p . && tsc -p src/webview && tsc -p test/webview && tsc -p test/e2e",
+    "lint": "eslint .",
+    "test": "node --test \"test/**/*.test.ts\"",
+    "test:e2e": "playwright test",
+    "test:vscode": "node esbuild.mjs && node test/vscode/make-fixtures.ts && esbuild test/vscode/extension.suite.ts --bundle --platform=node --format=cjs --external:vscode --outfile=dist-test/vscode/extension.test.cjs --log-level=warning && vscode-test",
+    "coverage": "node --test --experimental-test-coverage \"test/**/*.test.ts\"",
+    "check": "pnpm typecheck && pnpm lint && pnpm test && pnpm build",
+    "preview": "node esbuild.mjs && node scripts/preview.ts",
+    "fixtures": "node scripts/fixtures.ts",
+    "package": "pnpm check && vsce package --no-dependencies"
+  },
+  "packageManager": "pnpm@10.15.1",
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@playwright/test": "1.63.0",
+    "@types/node": "24.19.1",
+    "@types/vscode": "1.140.0",
+    "@vscode/test-cli": "0.0.15",
+    "@vscode/test-electron": "3.1.0",
+    "@vscode/vsce": "4.0.0",
+    "esbuild": "0.28.2",
+    "eslint": "10.12.0",
+    "happy-dom": "20.14.5",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.71.1"
+  },
+  "pnpm": {
+    "overrides": {
+      "mocha>serialize-javascript": "7.1.2"
+    }
+  }
+}

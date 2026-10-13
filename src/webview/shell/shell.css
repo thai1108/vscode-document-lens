@@ -1,0 +1,166 @@
+:root {
+  --dl-bg: var(--vscode-editor-background, #1e1e1e);
+  --dl-fg: var(--vscode-foreground, #cccccc);
+  --dl-dim: var(--vscode-descriptionForeground, #9d9d9d);
+  --dl-panel: var(--vscode-sideBar-background, #252526);
+  --dl-border: var(--vscode-panel-border, rgba(128, 128, 128, 0.35));
+  --dl-hover: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.15));
+  --dl-active: var(--vscode-list-activeSelectionBackground, #04395e);
+  --dl-active-fg: var(--vscode-list-activeSelectionForeground, #ffffff);
+  --dl-input: var(--vscode-input-background, #3c3c3c);
+  --dl-input-border: var(--vscode-input-border, transparent);
+  --dl-focus: var(--vscode-focusBorder, #007fd4);
+  --dl-warning-bg: var(--vscode-inputValidation-warningBackground, #352a05);
+  --dl-warning-border: var(--vscode-inputValidation-warningBorder, #b89500);
+  --dl-error-bg: var(--vscode-inputValidation-errorBackground, #5a1d1d);
+  --dl-error-border: var(--vscode-inputValidation-errorBorder, #be1100);
+  /* Behind pages, sheets and slides: a neutral backdrop so white documents stand out in both themes. */
+  --dl-canvas: var(--vscode-editorWidget-background, #2a2a2a);
+  --dl-mono: var(--vscode-editor-font-family, ui-monospace, Menlo, monospace);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  /* VS Code's default webview styles pad the body by 20px left and right. */
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--dl-bg);
+  color: var(--dl-fg);
+  font-family: var(--vscode-font-family, system-ui, sans-serif);
+  font-size: var(--vscode-font-size, 13px);
+}
+
+button,
+input,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+.dim {
+  color: var(--dl-dim);
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.toolbar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  height: 34px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--dl-border);
+  white-space: nowrap;
+}
+
+.file-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.viewer-tools,
+.zoom-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.icon-button,
+.text-button,
+.zoom-value {
+  height: 24px;
+  padding: 0 6px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.icon-button {
+  min-width: 24px;
+}
+
+.zoom-value {
+  min-width: 52px;
+  font-variant-numeric: tabular-nums;
+}
+
+.icon-button:hover,
+.text-button:hover,
+.zoom-value:hover {
+  background: var(--dl-hover);
+}
+
+.icon-button:focus-visible,
+.text-button:focus-visible,
+.zoom-value:focus-visible {
+  outline: 1px solid var(--dl-focus);
+  outline-offset: -1px;
+}
+
+.icon-button:disabled,
+.text-button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.banner {
+  flex: none;
+  padding: 6px 12px;
+  border-bottom: 1px solid;
+}
+
+.banner.notice {
+  background: var(--dl-warning-bg);
+  border-color: var(--dl-warning-border);
+}
+
+.banner.error {
+  background: var(--dl-error-bg);
+  border-color: var(--dl-error-border);
+  white-space: pre-wrap;
+}
+
+.content {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  background: var(--dl-canvas);
+  outline: none;
+}
+
+.placeholder {
+  max-width: 560px;
+  margin: 48px auto;
+  padding: 24px 28px;
+  background: var(--dl-bg);
+  border: 1px solid var(--dl-border);
+  border-radius: 6px;
+}
+
+.placeholder h1 {
+  margin: 0 0 8px;
+  font-size: 1.3em;
+  word-break: break-all;
+}

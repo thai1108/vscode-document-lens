@@ -1,0 +1,106 @@
+# Document Lens
+
+Preview documents inside VS Code without leaving the editor: `.pdf`, `.docx`, `.doc`, `.xlsx`, `.xls`, `.pptx` and
+`.ppt` files open read-only in a viewer tab. Everything happens locally — nothing is uploaded, no other application
+is needed.
+
+> Work in progress: the shared frame is in place and the format viewers are being built one by one (see the table).
+
+## Formats
+
+| Extension | Viewer | Status |
+| --- | --- | --- |
+| `.pdf` | Pages with selectable text, page navigation, zoom, fit width, find | Planned |
+| `.docx` | The document laid out as pages, with images, tables and links | Planned |
+| `.doc` | Simplified preview: the document's text | Planned |
+| `.xlsx`, `.xls` | Grid with sheet tabs, merged cells, column widths, frozen panes, basic styles | Planned |
+| `.pptx` | Slide list and slide view with text, pictures, shapes and tables | Planned |
+| `.ppt` | Simplified preview: each slide's text and pictures | Planned |
+
+Every viewer shares the same frame:
+
+- Zoom with the toolbar, `+` / `-` / `0`, or Ctrl/Cmd + scroll (pinch on a trackpad)
+- Reloads by itself when the file changes on disk
+- Links in a document open in your browser (http and https only); nothing else can navigate the view
+- Files above a size cap per format (64–256 MB) and malformed or suspicious files (e.g. ZIP bombs) are refused with
+  a message instead of freezing VS Code
+
+## Install
+
+Until it is on the Marketplace, install the `.vsix` from the
+[releases](https://github.com/thai1108/vscode-document-lens/releases):
+
+```bash
+code --install-extension document-lens-<version>.vsix
+```
+
+Then open any supported file. To use another editor for a file type, right-click the file → **Open With…** →
+**Configure default editor**.
+
+## Build from source
+
+Requires Node.js 22.18 or later (the tests and scripts run TypeScript directly) and pnpm 10.
+
+```bash
+corepack enable                    # provides the pnpm version pinned in package.json
+pnpm install
+pnpm package                       # runs all checks, writes document-lens-<version>.vsix
+code --install-extension document-lens-0.0.1.vsix
+```
+
+## Development
+
+```bash
+pnpm watch                        # rebuild on change, then F5 in VS Code to launch the extension host
+pnpm check                        # type-check, lint, fast tests (node:test + happy-dom), build
+pnpm coverage                     # fast tests with Node's built-in coverage report
+pnpm test:e2e                     # Playwright in the installed Google Chrome against the browser preview
+pnpm test:vscode                  # extension tests inside VS Code (uses the installed app if found)
+pnpm fixtures <dir>               # write the synthetic sample of every format
+pnpm preview <file> <dir>         # static browser copy of the viewer for one file, for UI checks
+```
+
+- `pnpm test:e2e` opens the synthetic sample of every format through `pnpm preview`, whose mock host replays VS
+  Code's message serializer, and fails on console or CSP errors. To run the same checks on your own documents, list
+  them in `E2E_FILES`, separated by `:` — e.g. `E2E_FILES="$HOME/a.pdf:$HOME/b.xlsx" pnpm test:e2e`. It needs
+  Google Chrome; no Playwright browser download is required.
+- `pnpm test:vscode` checks that every format opens in its Document Lens editor by default and that files are read
+  with the size cap and checks applied. Set `VSCODE_EXECUTABLE` to use a specific VS Code build; without it and
+  without `/Applications/Visual Studio Code.app`, a copy of VS Code is downloaded.
+- `pnpm preview` and `E2E_FILES` copy the document into the preview folder; keep real documents out of the repository.
+
+## How it works
+
+The extension host reads the file (refusing it above the format's size cap), runs a cheap structural check
+(`src/preflight.ts`: file signature; for `.docx`/`.xlsx`/`.pptx` the ZIP central directory against the limits in
+`src/limits.ts`) and posts the bytes to the webview as a plain `Uint8Array`. The viewer parses and renders them inside
+the webview, which runs under a strict Content Security Policy: no network, no inline scripts, only the extension's
+own bundle. Messages from the webview are validated in `src/protocol.ts`.
+
+## Contributing: adding a format
+
+1. Add its size cap to `MAX_FILE_SIZE` in `src/limits.ts`.
+2. Describe it in `src/formats/<id>.ts` (`id`, extensions, size cap, viewer bundle name, extra CSP sources if the
+   viewer needs any, preflight check) and add it to `FORMATS` in `src/formats/index.ts`.
+3. Declare the custom editor `documentLens.<id>` with the same file patterns in `package.json`.
+4. Write the viewer in `src/webview/<viewer>/main.ts`: call `startViewer()` from `src/webview/shell/app.ts` with an
+   object whose `render()` turns the bytes into DOM inside `context.content`. Treat the file as hostile: no script
+   execution, sanitize any HTML a library produces, no remote loads.
+5. Add a synthetic sample in `test/fixtures/<id>.ts` (generated by code, never a real document) and tests at every
+   layer: unit, happy-dom (`test/webview`), Playwright (`test/e2e`) and the VS Code suite.
+
+`pnpm test` fails if the registry, `package.json`, the viewer bundles and the samples get out of step.
+
+## Releasing
+
+1. Bump `version` in `package.json` and add a matching `## <version>` section to `CHANGELOG.md`; merge to `main`.
+2. Push a tag `v<version>` (e.g. `git tag v0.1.0 && git push origin v0.1.0`). The *Release* workflow checks that the
+   tag matches `package.json`, runs `pnpm check` and `pnpm package`, and creates a GitHub Release with the `.vsix`
+   attached and the CHANGELOG section as notes.
+3. Download the `.vsix` from the release and upload it to the Marketplace by hand.
+
+## Trademarks
+
+Microsoft, Word, Excel and PowerPoint are trademarks of the Microsoft group of companies; Adobe and Acrobat are
+trademarks of Adobe Inc. This project is an independent viewer for the file formats listed above and is not
+affiliated with, sponsored or endorsed by Microsoft or Adobe. The icon is original artwork.
