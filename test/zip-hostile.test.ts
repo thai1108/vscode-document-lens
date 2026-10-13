@@ -23,25 +23,26 @@ describe('ZipArchive with broken archives', () => {
   it('reports a central directory that points at the wrong place', () => {
     const zip = sample();
     zip.writeUInt32LE(0, zip.length - EOCD_SIZE + 16);
-    assert.throws(() => ZipArchive.open(zip), /Corrupt ZIP central directory at entry 0/);
+    assert.throws(() => ZipArchive.open(zip), /the central directory is not where the end record says/);
   });
 
   it('reports a central directory that runs past the end of the file', () => {
     const zip = sample();
+    zip.writeUInt16LE(5, zip.length - EOCD_SIZE + 8);
     zip.writeUInt16LE(5, zip.length - EOCD_SIZE + 10);
     assert.throws(() => ZipArchive.open(zip), /Corrupt ZIP central directory at entry 1/);
   });
 
-  it('reports a damaged local header when the entry is read', () => {
+  it('reports a damaged local header when the archive is opened', () => {
     const zip = sample();
     zip.writeUInt32LE(0, 0);
-    const archive = ZipArchive.open(zip);
-    assert.throws(() => archive.read('a.txt'), /Corrupt ZIP local header: a\.txt/);
+    assert.throws(() => ZipArchive.open(zip), /Corrupt ZIP local header: a\.txt/);
   });
 
   it('reports compression methods other than stored and deflate', () => {
     const zip = sample();
     zip.writeUInt16LE(12, centralOffset(zip) + 10);
+    zip.writeUInt16LE(12, 8);
     const archive = ZipArchive.open(zip);
     assert.throws(() => archive.read('a.txt'), /Unsupported ZIP compression method 12: a\.txt/);
   });
@@ -99,5 +100,80 @@ describe('ZipArchive against ZIP bombs', () => {
     assert.throws(() => ZipArchive.open(writeZip([{ name: 'short', data: 'abc', declaredSize: 10 }])).read('short'), /\(size mismatch\): short/);
     assert.throws(() => ZipArchive.open(writeZip([{ name: 'cut', data: 'abc', store: true, declaredCompressedSize: 1_000_000 }])).read('cut'), /\(truncated data\): cut/);
     assert.throws(() => ZipArchive.open(writeZip([{ name: 'z64', data: 'abc', declaredSize: 0xffffffff }])), /ZIP64 archives are not supported/);
+  });
+});
+
+describe('ZipArchive against archives that readers see differently', () => {
+  const unicodePath = (name: string) => {
+    const value = Buffer.concat([Buffer.from([1, 0, 0, 0, 0]), Buffer.from(name, 'utf8')]);
+    const header = Buffer.alloc(4);
+    header.writeUInt16LE(0x7075, 0);
+    header.writeUInt16LE(value.length, 2);
+    return Buffer.concat([header, value]);
+  };
+
+  it('refuses data prepended to the archive', () => {
+    const zip = writeZip([{ name: 'a.txt', data: 'A' }], '', { prefix: Buffer.from('MZ junk before the archive') });
+    assert.throws(() => ZipArchive.open(zip), /the central directory is not where the end record says/);
+  });
+
+  it('refuses data after the archive and end records with inconsistent counts', () => {
+    assert.throws(() => ZipArchive.open(Buffer.concat([sample(), Buffer.from('trailing')])), /data after the archive comment/);
+    const zip = sample();
+    zip.writeUInt16LE(2, zip.length - EOCD_SIZE + 8);
+    assert.throws(() => ZipArchive.open(zip), /inconsistent entry counts/);
+    const zip64 = sample();
+    zip64.writeUInt16LE(0xffff, zip64.length - EOCD_SIZE + 10);
+    assert.throws(() => ZipArchive.open(zip64), /ZIP64 archives are not supported/);
+  });
+
+  it('refuses a directory size that does not match its entries', () => {
+    const zip = writeZip([{ name: 'a.txt', data: 'A' }, { name: 'b.txt', data: 'B' }]);
+    zip.writeUInt16LE(1, zip.length - EOCD_SIZE + 8);
+    zip.writeUInt16LE(1, zip.length - EOCD_SIZE + 10);
+    assert.throws(() => ZipArchive.open(zip), /its size does not match its entries/);
+  });
+
+  it('refuses names a reader would normalize', () => {
+    for (const name of ['x/../word/document.xml', './word/document.xml', 'word//document.xml', 'word\\document.xml', '/word/document.xml', 'word/./a', '..', 'a\0b']) {
+      assert.throws(() => ZipArchive.open(writeZip([{ name, data: 'x' }])), /not canonical/, JSON.stringify(name));
+    }
+    assert.deepEqual(ZipArchive.open(writeZip([{ name: 'word/', data: '' }, { name: 'word/画面.xml', data: 'x' }])).names(), ['word/', 'word/画面.xml']);
+  });
+
+  it('refuses non-ASCII names without the UTF-8 flag and invalid UTF-8', () => {
+    assert.throws(() => ZipArchive.open(writeZip([{ name: 'café.xml', data: 'x', noUtf8Flag: true }])), /not valid UTF-8/);
+    const zip = writeZip([{ name: 'ab.xml', data: 'x' }]);
+    const at = centralOffset(zip) + 46;
+    zip[at] = 0xff;
+    zip[30] = 0xff;
+    assert.throws(() => ZipArchive.open(zip), /not valid UTF-8/);
+  });
+
+  it('refuses a Unicode Path extra field that names another entry, and accepts a matching one', () => {
+    assert.throws(() => ZipArchive.open(writeZip([{ name: 'decoy.bin', data: 'x', extra: unicodePath('word/document.xml') }])), /second, different name: decoy\.bin/);
+    assert.equal(ZipArchive.open(writeZip([{ name: 'a.xml', data: 'x', extra: unicodePath('a.xml') }])).readText('a.xml'), 'x');
+    const broken = Buffer.from([0x75, 0x70, 0xff, 0x00]);
+    assert.throws(() => ZipArchive.open(writeZip([{ name: 'a.xml', data: 'x', extra: broken }])), /Corrupt ZIP extra field: a\.xml/);
+  });
+
+  it('refuses duplicate names and local headers that disagree with the central directory', () => {
+    assert.throws(() => ZipArchive.open(writeZip([{ name: 'a.xml', data: 'small' }, { name: 'a.xml', data: 'other' }])), /two entries named a\.xml/);
+    assert.throws(() => ZipArchive.open(writeZip([{ name: 'a.xml', data: 'x', localName: 'b.xml' }])), /local header disagrees with the central directory: a\.xml/);
+    const zip = sample();
+    zip.writeUInt32LE(99, 22);
+    assert.throws(() => ZipArchive.open(zip), /local header disagrees/);
+  });
+
+  it('refuses entries that share bytes', () => {
+    const zip = writeZip([{ name: 'a.txt', data: 'A'.repeat(50), store: true }, { name: 'b.txt', data: 'B'.repeat(50), store: true }]);
+    // Point the second entry at the first one's local header.
+    const second = centralOffset(zip) + 46 + 'a.txt'.length;
+    zip.writeUInt32LE(0, second + 42);
+    assert.throws(() => ZipArchive.open(zip), /local header disagrees with the central directory: b\.txt/);
+    const overlapping = writeZip([{ name: 'a.txt', data: 'A'.repeat(50), store: true }, { name: 'b.txt', data: 'B'.repeat(50), store: true }]);
+    overlapping.writeUInt32LE(70, centralOffset(overlapping) + 20);
+    overlapping.writeUInt32LE(70, 18);
+    assert.throws(() => ZipArchive.open(overlapping), /ZIP entries overlap: a\.txt and b\.txt/);
   });
 });
