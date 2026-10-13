@@ -1,5 +1,6 @@
 import '../shell/shell.css';
+import './spreadsheet.css';
 import { startViewer } from '../shell/app.ts';
-import { placeholderViewer } from '../shell/placeholder.ts';
+import { spreadsheetViewer } from './viewer.ts';
 
-startViewer(placeholderViewer('Spreadsheet'));
+startViewer(spreadsheetViewer());

@@ -1,0 +1,276 @@
+/* The sheet itself is white with black text, like Excel, whatever the VS Code theme: cell colors in the file assume
+   it. Headers, tabs and the cell bar follow the theme. --dl-zoom is set on the grid by the viewer. */
+
+.dl-sheet {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.dl-grid-host {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+.dl-grid {
+  --dl-zoom: 1;
+  --dl-gridline: #dadada;
+  --dl-freeze-line: #9b9b9b;
+  --dl-header-bg: var(--vscode-editorGroupHeader-tabsBackground, var(--dl-panel));
+  --dl-header-selected-bg: var(--vscode-list-inactiveSelectionBackground, rgba(128, 128, 128, 0.3));
+  --dl-header-selected-fg: var(--vscode-list-inactiveSelectionForeground, var(--dl-fg));
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  background: #ffffff;
+  color: #000000;
+  outline: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.dl-grid:focus-visible .dl-selection {
+  border-color: var(--dl-focus);
+}
+
+.dl-canvas {
+  position: relative;
+}
+
+/* The bands clip with overflow: clip, not hidden: hidden would make them scroll containers and break the sticky
+   corner and frozen columns inside them. */
+.dl-band-top {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  overflow: clip;
+  background: #ffffff;
+}
+
+.dl-band-corner {
+  position: sticky;
+  left: 0;
+  z-index: 3;
+  overflow: clip;
+  background: #ffffff;
+}
+
+.dl-body {
+  position: relative;
+  z-index: 0;
+}
+
+.dl-band-left {
+  position: sticky;
+  left: 0;
+  z-index: 3;
+  overflow: clip;
+  background: #ffffff;
+}
+
+.dl-frozen-rows .dl-band-top {
+  box-shadow: 0 1px 0 var(--dl-freeze-line);
+}
+
+.dl-frozen-cols .dl-band-corner,
+.dl-frozen-cols .dl-band-left {
+  box-shadow: 1px 0 0 var(--dl-freeze-line);
+}
+
+.dl-gridline {
+  position: absolute;
+  background: var(--dl-gridline);
+}
+
+.dl-no-gridlines .dl-gridline {
+  display: none;
+}
+
+.dl-cell {
+  position: absolute;
+  display: flex;
+  align-items: flex-end;
+  overflow: hidden;
+  padding: 0 calc(var(--dl-zoom) * 3px);
+  white-space: pre;
+  line-height: 1.2;
+  font-family: Calibri, Carlito, 'Segoe UI', sans-serif;
+  font-size: calc(var(--dl-zoom) * 11pt);
+}
+
+.dl-h-left {
+  justify-content: flex-start;
+  text-align: left;
+}
+
+.dl-h-center {
+  justify-content: center;
+  text-align: center;
+}
+
+.dl-h-right {
+  justify-content: flex-end;
+  text-align: right;
+}
+
+/* Text running over empty neighbors: the cell keeps its own box (fill, borders) and the text box is wider. */
+.dl-spill {
+  overflow: visible;
+  z-index: 1;
+}
+
+.dl-spill-text {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  display: flex;
+  align-items: inherit;
+  justify-content: inherit;
+  overflow: hidden;
+  padding: inherit;
+}
+
+/* A cell's underline reaches its in-flow content by itself, but not this absolutely positioned box. Explicit
+   inheritance makes the browser style an element from scratch, so it is kept to these few boxes. */
+.dl-spill-text {
+  text-decoration: inherit;
+}
+
+/* Links look the way the cell's format says (Excel's Hyperlink style is blue and underlined), not like web links. */
+.dl-link {
+  color: inherit;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+/* Numbers too wide for their cell are narrowed a little (see Grid.fitNumbers) from their aligned edge. */
+.dl-num {
+  flex: none;
+}
+
+.dl-h-left > .dl-num {
+  transform-origin: left center;
+}
+
+.dl-h-right > .dl-num {
+  transform-origin: right center;
+}
+
+.dl-selection {
+  position: absolute;
+  z-index: 2;
+  border: 2px solid #217346;
+  pointer-events: none;
+}
+
+.dl-header {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: var(--dl-header-bg);
+  color: var(--dl-dim);
+  border-right: 1px solid var(--dl-border);
+  border-bottom: 1px solid var(--dl-border);
+  font-family: var(--vscode-font-family, system-ui, sans-serif);
+  font-size: calc(var(--dl-zoom) * 11px);
+  white-space: nowrap;
+}
+
+/* The selection color is often translucent, so it is layered over the header color rather than replacing it. */
+.dl-header.dl-selected {
+  background-image: linear-gradient(var(--dl-header-selected-bg), var(--dl-header-selected-bg));
+  color: var(--dl-header-selected-fg);
+  font-weight: 600;
+}
+
+.dl-message {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  color: var(--dl-dim);
+  background: var(--dl-canvas);
+  text-align: center;
+  white-space: pre-wrap;
+}
+
+.dl-loading {
+  z-index: 10;
+}
+
+.dl-tabs {
+  display: flex;
+  flex: none;
+  overflow-x: auto;
+  gap: 1px;
+  padding: 0 8px;
+  background: var(--dl-panel);
+  border-top: 1px solid var(--dl-border);
+  scrollbar-width: thin;
+}
+
+.dl-tab {
+  flex: none;
+  max-width: 240px;
+  height: 26px;
+  padding: 0 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: transparent;
+  color: var(--dl-dim);
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+}
+
+.dl-tab:hover {
+  background: var(--dl-hover);
+  color: var(--dl-fg);
+}
+
+.dl-tab[aria-selected='true'] {
+  background: var(--dl-bg);
+  color: var(--dl-fg);
+  border-bottom-color: var(--dl-focus);
+}
+
+.dl-tab:focus-visible {
+  outline: 1px solid var(--dl-focus);
+  outline-offset: -1px;
+}
+
+.dl-cellbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 45vw;
+  margin-left: 12px;
+  font-family: var(--dl-mono);
+  font-size: 12px;
+}
+
+.dl-cellbar-address {
+  flex: none;
+  min-width: 56px;
+  padding: 1px 6px;
+  background: var(--dl-input);
+  border: 1px solid var(--dl-input-border);
+  border-radius: 2px;
+  text-align: center;
+}
+
+.dl-cellbar-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: text;
+}
