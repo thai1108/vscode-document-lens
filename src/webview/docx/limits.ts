@@ -1,7 +1,13 @@
 // Caps on what a .docx can make the viewer build, on top of the host's ZIP checks and MAX_XML_PART_SIZE
-// (src/limits.ts). docx-preview renders the whole document at once, recursively, so the parsed model is measured
-// before it is turned into DOM.
+// (src/limits.ts). docx-preview parses every part and renders the whole document at once, recursively, so the XML is
+// budgeted before it is parsed and the parsed model is measured before it is turned into DOM.
 export const DOCX_LIMITS = {
+  /** All the XML parts docx-preview parses, together (each is also within MAX_XML_PART_SIZE). */
+  maxXmlTotalSize: 96 * 1024 * 1024,
+  /** Elements in all those parts together. */
+  maxXmlElements: 4_000_000,
+  /** Pictures and fonts the document refers to, each counted once. */
+  maxMediaSize: 256 * 1024 * 1024,
   /** Estimated elements the render would create (body, notes, and a header and footer per page). */
   maxRenderedNodes: 2_000_000,
   /** Nesting of the parsed model (tables in tables, text boxes, ...). */

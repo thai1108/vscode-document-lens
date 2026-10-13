@@ -3,7 +3,7 @@
 // blob:/data: images (anything else, e.g. a picture linked from the web, becomes a labelled placeholder); inline
 // styles go through the same rules as the style sheets (css.ts).
 import { externalUrl } from '../../protocol.ts';
-import { clampLengths, isSafeCssValue, sanitizeDeclarations } from './css.ts';
+import { clampLengths, isSafeCssValue, sanitizeDeclarations, type FontNames } from './css.ts';
 
 const HTML = 'http://www.w3.org/1999/xhtml';
 const SVG = 'http://www.w3.org/2000/svg';
@@ -39,6 +39,8 @@ const SHOW_ELEMENT = 1;
 export interface SanitizeOptions {
   /** Prefix for every id in the document (bookmarks), so none can collide with the viewer's own ids. */
   idPrefix: string;
+  /** Embedded fonts' own names, for the font-family lists in inline styles (see embeddedFontNames). */
+  fonts?: FontNames;
 }
 
 export const IMAGE_PLACEHOLDER_CLASS = 'dl-docx-image-placeholder';
@@ -105,7 +107,7 @@ function sanitizeElement(element: Element, options: SanitizeOptions): void {
   if (element.hasAttribute('style')) {
     const style = (element as Partial<ElementCSSInlineStyle>).style;
     if (style) {
-      sanitizeDeclarations(style);
+      sanitizeDeclarations(style, options.fonts);
     } else {
       element.removeAttribute('style');
     }

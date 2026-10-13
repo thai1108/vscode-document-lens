@@ -5,9 +5,11 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { MAX_XML_PART_SIZE } from '../../src/limits.ts';
-import { EMBEDDED_FONT, SAMPLE_LINK } from '../fixtures/docx.ts';
+import { FONT_INJECTION, SAMPLE_LINK } from '../fixtures/docx.ts';
 import { compoundFileHeaderStub } from '../support/compoundFile.ts';
-import { CONTENT_TYPE, paragraph, RELATIONSHIP, run, WORD_NAMESPACES, wordPackage } from '../support/wordPackage.ts';
+import { png } from '../support/png.ts';
+import { CONTENT_TYPE, inlinePicture, paragraph, RELATIONSHIP, run, WORD_NAMESPACES, wordPackage } from '../support/wordPackage.ts';
+import { junkDeflateEntry, markDeflated, prependedDecoy } from '../support/zipTamper.ts';
 import { expectShellLoaded, servePreview, watchProblems, writeSample, type PreviewSite } from './preview-server.ts';
 
 /** The page gap in docx.css, in CSS px at 100%. */
@@ -88,8 +90,8 @@ test.describe('.docx viewer', () => {
       expect(nonce).toBe(true);
       expect(text).toMatch(/^(@font-face|@scope \(\.dl-docx\))/);
     }
-    // The embedded font is declared from a blob: URL.
-    expect(sheets.map(([, text]) => text).join('\n')).toMatch(new RegExp(`@font-face \\{ font-family: "${EMBEDDED_FONT}"; src: url\\("blob:`));
+    // The embedded font is declared from a blob: URL, under a name of the viewer's own.
+    expect(sheets.map(([, text]) => text).join('\n')).toMatch(/@font-face \{ font-family: dl-docx-font-1; src: url\("blob:/);
     expect(opened.problems).toEqual([]);
   });
 
@@ -193,6 +195,16 @@ test.describe('.docx viewer', () => {
     expect(topmost).toBe(true);
     const frame = await page.locator('.dl-docx-frame').evaluate((element) => [getComputedStyle(element).position, getComputedStyle(element).contain]);
     expect(frame).toEqual(['static', 'layout']);
+
+    // var() substitutions from the theme neither load anything nor make huge lengths.
+    const css = (await page.locator('head style').allTextContents()).join('\n');
+    expect(css).not.toMatch(/example\.invalid|var\(--[uks]\)|--u:|--k:/);
+    const margin = await content.locator('section.docx').first().evaluate((section) => parseFloat(getComputedStyle(section).marginLeft));
+    expect(margin).toBeLessThanOrEqual(MAX_LENGTH_PX + 1);
+    // The embedded font is renamed, so it cannot stand in for the UI font it claims to be.
+    expect(FONT_INJECTION).toContain('BlinkMacSystemFont');
+    expect(css).toMatch(/@font-face \{ font-family: dl-docx-font-1; src: url\("blob:[^"]+"\); \}/);
+    expect(css).not.toMatch(/BlinkMacSystemFont|size-adjust/);
     expect(opened.problems).toEqual([]);
   });
 
@@ -219,6 +231,45 @@ test.describe('.docx viewer', () => {
     await page.evaluate(() => (window as unknown as { previewReload(): void }).previewReload());
     await expect.poll(objectUrls).not.toEqual(before);
     expect((await page.evaluate(() => (window as unknown as { revoked: string[] }).revoked)).sort()).toEqual(before);
+    expect(opened.problems).toEqual([]);
+  });
+
+  test('makes one URL per picture however often it is used, and releases it when the file reloads', async ({ page }) => {
+    await page.addInitScript(() => {
+      const create = URL.createObjectURL.bind(URL);
+      const revoke = URL.revokeObjectURL.bind(URL);
+      const created: string[] = [];
+      const revoked: string[] = [];
+      Object.assign(window, { created, revoked });
+      URL.createObjectURL = (blob: Blob | MediaSource) => {
+        const url = create(blob);
+        created.push(url);
+        return url;
+      };
+      URL.revokeObjectURL = (url: string) => {
+        revoked.push(url);
+        revoke(url);
+      };
+    });
+    // 200 uses of one picture, some in superscript runs (which docx-preview renders twice, keeping one copy).
+    const use = inlinePicture('rIdPicture', 9144 * 20, 9144 * 20);
+    const superscript = use.replace('<w:r>', '<w:r><w:rPr><w:vertAlign w:val="superscript"/></w:rPr>');
+    const body = Array.from({ length: 100 }, () => paragraph(use + superscript)).join('');
+    const picture = { name: 'word/media/image1.png', contentType: 'image/png', data: png(64, 64, () => [200, 40, 40, 255]), relationship: { id: 'rIdPicture', type: RELATIONSHIP.image } };
+    const opened = await openDocument(page, writeFile('repeated.docx', wordPackage({ body, media: [picture] })));
+    site = opened.site;
+    await expect(page.locator('#content img')).toHaveCount(200);
+    const urls = () =>
+      page.evaluate(() => {
+        const { created, revoked } = window as unknown as { created: string[]; revoked: string[] };
+        return { created: [...created], revoked: [...revoked] };
+      });
+    const first = await urls();
+    expect(first.created).toHaveLength(1);
+    expect(await page.locator('#content img').evaluateAll((images) => new Set(images.map((image) => image.getAttribute('src'))).size)).toBe(1);
+    await page.evaluate(() => (window as unknown as { previewReload(): void }).previewReload());
+    await expect.poll(async () => (await urls()).created.length).toBe(2);
+    expect((await urls()).revoked).toEqual(first.created);
     expect(opened.problems).toEqual([]);
   });
 
@@ -278,6 +329,37 @@ test.describe('.docx viewer', () => {
       wordPackage({ body: paragraph(run('text')), extraEntries: [forged] }),
       'Could not display forged.docx: the file is damaged: word/media/forged.png is larger than its ZIP header says',
     );
+  });
+
+  test('XML beyond the element budget is refused before docx-preview parses it', async ({ page }) => {
+    // About 5 million elements in 30 MB: within the size limits, beyond DOCX_LIMITS.maxXmlElements.
+    const xml = `<w:hdr ${WORD_NAMESPACES}>${'<w:p/>'.repeat(5_000_000)}</w:hdr>`;
+    const header = { name: 'word/header1.xml', contentType: CONTENT_TYPE.header, xml, relationship: { id: 'rIdHeader', type: RELATIONSHIP.header } };
+    await expectRefused(
+      page,
+      'dense.docx',
+      wordPackage({ body: paragraph(run('x')), parts: [header] }),
+      'Could not display dense.docx: it has more than 4,000,000 XML elements, the most Document Lens reads',
+    );
+  });
+
+  test('archives JSZip would read differently from the checks are refused', async ({ page }) => {
+
+    const refusal = (detail: string) => `Could not display tampered.docx: the file is damaged or uses ZIP features Document Lens does not read (${detail})`;
+    // A well-formed document part, and a malformed one JSZip would put under the same name.
+    const decoy = wordPackage({ body: paragraph(run('text')), extraEntries: [{ name: 'x/../word/document.xml', data: '<w:document><not-closed></w:document>' }] });
+    await expectRefused(page, 'tampered.docx', decoy, refusal('unusual entry name "x/../word/document.xml"'));
+    // A harmless archive in front of the real one, with the same entries: JSZip skips to the real one (whose picture
+    // inflates far past its declared size), a reader that trusts the end record's offset stays on the decoy.
+    const harmless = wordPackage({ body: paragraph(run('text')), extraEntries: [{ name: 'word/media/forged.png', data: 'x' }] });
+    const real = wordPackage({
+      body: paragraph(run(Array.from({ length: 5000 }, (_, i) => i).join(','))),
+      extraEntries: [{ name: 'word/media/forged.png', data: Buffer.alloc(1_000_000), declaredSize: 100 }],
+    });
+    await expectRefused(page, 'tampered.docx', prependedDecoy(harmless, real), refusal('unexpected data around the ZIP central directory'));
+    // Chrome's inflater stops at bytes after the end of a deflate stream (pako, in JSZip, ignores them).
+    const junk = markDeflated(wordPackage({ body: paragraph(run('text')), extraEntries: [junkDeflateEntry('word/media/image1.png', 8 * 1024 * 1024)] }), 'word/media/image1.png');
+    await expectRefused(page, 'tampered.docx', junk, refusal('word/media/image1.png cannot be inflated'));
   });
 
   test('a password-protected document is refused with a clear message', async ({ page }) => {

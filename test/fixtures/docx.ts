@@ -1,6 +1,6 @@
 import { png } from '../support/png.ts';
 import type { Sample } from '../support/samples.ts';
-import { CONTENT_TYPE, inlinePicture, paragraph, RELATIONSHIP, run, WORD_NAMESPACES, wordPackage } from '../support/wordPackage.ts';
+import { CONTENT_TYPE, escapeXml, inlinePicture, paragraph, RELATIONSHIP, run, WORD_NAMESPACES, wordPackage } from '../support/wordPackage.ts';
 
 /** The external link in sample.docx. */
 export const SAMPLE_LINK = 'https://github.com/thai1108/vscode-document-lens';
@@ -134,10 +134,18 @@ function sampleDocx(): Uint8Array {
 const HUGE = '99999999';
 const HUGE_EMU = '99999999999';
 
+/** Theme font name that injects declarations: var() substitutions that would load a picture or make a huge length. */
+const THEME_INJECTION =
+  'x; --u: "https://example.invalid/beacon.png"; --s: 30; --k: 1000000; border: 10px solid; ' +
+  'border-image: url(https://example.invalid/literal.png) var(--s); border-image-source: image-set(var(--u) 1x); ' +
+  'margin-left: calc(1pt * var(--k)); font-size: calc(1pt * var(--k))';
+/** Embedded font name that would turn its @font-face into one for a font the viewer's own UI uses. */
+export const FONT_INJECTION = 'X; font-family: BlinkMacSystemFont; size-adjust: 1000%';
+
 /**
  * A document that tries what a hostile file might: script and local-file links, pictures from the web, VML and style
- * values that try to escape the page, injected CSS rules, absurd sizes, an embedded HTML chunk and bookmarks named
- * like the viewer's own elements.
+ * values that try to escape the page, injected CSS rules and var() substitutions, an embedded font posing as a UI
+ * font, absurd sizes, an embedded HTML chunk and bookmarks named like the viewer's own elements.
  */
 function hostileDocx(): Uint8Array {
   const external = (id: string, type: string, target: string) => ({ id, type, target, external: true });
@@ -151,6 +159,14 @@ function hostileDocx(): Uint8Array {
   <w:color w:val="000000} :scope, .dl-docx, .dl-docx-frame { position: fixed !important; inset: 0 !important; z-index: 2147483647 !important; background: red !important; contain: none !important } .y { color: red"/>
 </w:rPr></w:style>
 </w:styles>`;
+  const theme =
+    '<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="T"><a:themeElements>' +
+    '<a:clrScheme name="C"><a:dk1><a:srgbClr val="000000"/></a:dk1></a:clrScheme>' +
+    `<a:fontScheme name="F"><a:majorFont><a:latin typeface="${escapeXml(THEME_INJECTION)}"/></a:majorFont>` +
+    '<a:minorFont><a:latin typeface="Calibri"/></a:minorFont></a:fontScheme></a:themeElements></a:theme>';
+  const fontTable =
+    `<w:fonts ${WORD_NAMESPACES}><w:font w:name="${escapeXml(FONT_INJECTION)}">` +
+    '<w:embedRegular r:id="rIdFont1" w:fontKey="{00000000-0000-0000-0000-000000000000}"/></w:font></w:fonts>';
   const vml =
     '<w:r><w:pict><v:rect style="position:fixed;left:0;top:0;width:99999px;height:99999px;z-index:2147483647;' +
     'background-image:url(https://example.invalid/vml-style.png)" fillcolor="url(https://example.invalid/fill.png)">' +
@@ -188,6 +204,14 @@ function hostileDocx(): Uint8Array {
     ],
     parts: [
       { name: 'word/styles.xml', contentType: CONTENT_TYPE.styles, xml: styles, relationship: { id: 'rIdStyles', type: RELATIONSHIP.styles } },
+      { name: 'word/theme/theme1.xml', contentType: CONTENT_TYPE.theme, xml: theme, relationship: { id: 'rIdTheme', type: RELATIONSHIP.theme } },
+      {
+        name: 'word/fontTable.xml',
+        contentType: CONTENT_TYPE.fontTable,
+        xml: fontTable,
+        relationship: { id: 'rIdFontTable', type: RELATIONSHIP.fontTable },
+        relationships: [{ id: 'rIdFont1', type: RELATIONSHIP.font, target: 'fonts/font1.odttf' }],
+      },
       {
         name: 'word/chunk.xml',
         contentType: 'application/xhtml+xml',
@@ -195,7 +219,10 @@ function hostileDocx(): Uint8Array {
         relationship: { id: 'rIdChunk', type: RELATIONSHIP.altChunk },
       },
     ],
-    media: [{ name: 'word/media/tiny.png', contentType: 'image/png', data: gradient(2, 2), relationship: { id: 'rIdTiny', type: RELATIONSHIP.image } }],
+    media: [
+      { name: 'word/media/tiny.png', contentType: 'image/png', data: gradient(2, 2), relationship: { id: 'rIdTiny', type: RELATIONSHIP.image } },
+      { name: 'word/fonts/font1.odttf', contentType: CONTENT_TYPE.obfuscatedFont, data: Buffer.alloc(64, 0x2a) },
+    ],
   });
 }
 

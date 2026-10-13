@@ -77,6 +77,7 @@ export function docxViewer(): Viewer {
       }
       styles = nextStyles;
       objectUrls = rendered.objectUrls;
+      context.showNotice(rendered.notice);
 
       zoom = context.zoom();
       frame.style.setProperty('zoom', String(zoom));

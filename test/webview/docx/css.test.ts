@@ -1,7 +1,15 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 import { Window } from 'happy-dom';
-import { clampLengths, isSafeCssValue, sanitizeDeclarations, sanitizeStyleSheet } from '../../../src/webview/docx/css.ts';
+import {
+  clampLengths,
+  embeddedFontNames,
+  isSafeCssValue,
+  renameFonts,
+  sanitizeDeclaration,
+  sanitizeDeclarations,
+  sanitizeStyleSheet,
+} from '../../../src/webview/docx/css.ts';
 
 describe('docx CSS values', () => {
   it('accepts values that load nothing or only blob:/data: URLs', () => {
@@ -49,6 +57,54 @@ describe('docx CSS values', () => {
   });
 });
 
+describe('docx CSS declarations', () => {
+  it('lets var() refer only to --docx-* properties, without a fallback, and drops env() and attr()', () => {
+    assert.equal(sanitizeDeclaration('color', 'var(--docx-accent1-color)'), 'var(--docx-accent1-color)');
+    assert.equal(sanitizeDeclaration('font-family', 'var(--docx-majorHAnsi-font), serif'), 'var(--docx-majorHAnsi-font), serif');
+    for (const [name, value] of [
+      ['border-image', 'url("https://example.com/literal.png") var(--s)'],
+      ['border-image-source', 'image-set(var(--u) 1x)'],
+      ['margin-left', 'calc(1pt * var(--k))'],
+      ['color', 'var(--docx-accent1-color, red)'],
+      ['width', 'env(safe-area-inset-left)'],
+      ['content', 'attr(title)'],
+    ]) {
+      assert.equal(sanitizeDeclaration(name ?? '', value ?? ''), undefined, `${name}: ${value}`);
+    }
+  });
+
+  it('keeps only --docx-* custom properties holding a colour, a blob: URL or names', () => {
+    assert.equal(sanitizeDeclaration('--docx-accent1-color', '#4472c4'), '#4472c4');
+    assert.equal(sanitizeDeclaration('--docx-rid5', 'url(blob:https://webview.test/1)'), 'url(blob:https://webview.test/1)');
+    assert.equal(sanitizeDeclaration('--docx-minorHAnsi-font', 'Yu Mincho'), 'Yu Mincho');
+    for (const [name, value] of [
+      ['--u', '#000000'],
+      ['--docx-u', '"https://example.com/beacon.png"'],
+      ['--docx-k', '1000000'],
+      ['--docx-k', '1000000px'],
+      ['--docx-bullet', 'url(https://example.com/x.png)'],
+      ['--docx-bullet', 'u\\72 l(https://example.com/x.png)'],
+    ]) {
+      assert.equal(sanitizeDeclaration(name ?? '', value ?? ''), undefined, `${name}: ${value}`);
+    }
+  });
+
+  it('drops products and quotients inside math functions, and zoom', () => {
+    assert.equal(sanitizeDeclaration('margin-top', 'calc(-36pt)'), 'calc(-36pt)');
+    assert.equal(sanitizeDeclaration('line-height', 'calc(100% + 12pt)'), 'calc(100% + 12pt)');
+    assert.equal(sanitizeDeclaration('width', 'calc((1px * sibling-index()) * 1e+09)'), undefined);
+    assert.equal(sanitizeDeclaration('width', 'min(1px / 0.000001, 2px)'), undefined);
+    assert.equal(sanitizeDeclaration('zoom', '40'), undefined);
+  });
+
+  it('renames embedded fonts in font-family lists', () => {
+    const fonts = new Map([['lens embedded', 'dl-docx-font-1']]);
+    assert.equal(renameFonts(`'Lens Embedded', "Yu Mincho", serif`, fonts), 'dl-docx-font-1, "Yu Mincho", serif');
+    assert.equal(sanitizeDeclaration('font-family', 'LENS   embedded', fonts), 'dl-docx-font-1');
+    assert.equal(sanitizeDeclaration('--docx-majorHAnsi-font', 'Lens Embedded', fonts), 'dl-docx-font-1');
+  });
+});
+
 describe('docx style sheets', () => {
   let window: Window;
   before(() => {
@@ -57,21 +113,29 @@ describe('docx style sheets', () => {
   });
   after(() => window.happyDOM.close());
 
-  it('scopes style rules to the document, keeps blob: fonts and drops what could load or escape', () => {
+  it('scopes style rules to the document and drops what could load or escape', () => {
     const css = sanitizeStyleSheet(
       [
         '.docx p { color: red; background-image: url("https://example.com/x.png"); width: 99999pt; }',
-        '@font-face { font-family: Embedded; src: url("blob:https://webview.test/font"); }',
-        '@font-face { font-family: "Remote"; src: url("https://example.com/font.woff"); }',
-        '@font-face { font-family: "Missing"; src: url(null); }',
         '@media print { .docx { color: blue; } }',
         'body { background-image: url("https://example.com/y.png"); }',
       ].join('\n'),
       '.dl-docx',
     );
+    assert.equal(css, '@scope (.dl-docx) {\n.docx p { color: red; width: 5000pt; }\n}');
+  });
+
+  it('renames embedded fonts and keeps only their family, source, weight and style', () => {
+    const sheet = [
+      '@font-face { font-family: Embedded; src: url("blob:https://webview.test/font"); font-weight: bold; size-adjust: 1000%; }',
+      '@font-face { font-family: "Remote"; src: url("https://example.com/font.woff"); }',
+      '@font-face { font-family: "Missing"; src: url(null); }',
+    ].join('\n');
+    const fonts = embeddedFontNames([sheet]);
+    assert.deepEqual([...fonts], [['embedded', 'dl-docx-font-1']]);
     assert.equal(
-      css,
-      '@font-face { font-family: Embedded; src: url("blob:https://webview.test/font"); }\n@scope (.dl-docx) {\n.docx p { color: red; width: 5000pt; }\n}',
+      sanitizeStyleSheet(sheet, '.dl-docx', fonts),
+      '@font-face { font-family: dl-docx-font-1; src: url("blob:https://webview.test/font"); font-weight: bold; }',
     );
   });
 
@@ -79,7 +143,7 @@ describe('docx style sheets', () => {
     assert.equal(sanitizeStyleSheet('@media print { p { color: red; } }', '.dl-docx'), '');
   });
 
-  it('cleans inline declarations: no zoom, no raw escapes in custom properties, clamped lengths', () => {
+  it('cleans inline declarations: no zoom, no unsafe custom properties, clamped lengths', () => {
     const element = window.document.createElement('span');
     element.style.setProperty('zoom', '40');
     element.style.setProperty('--docx-bullet', 'u\\72 l(https://example.com/x.png)');

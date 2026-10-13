@@ -75,7 +75,7 @@ describe('.docx viewer in the shell', () => {
 
     host.deliver(docx('sample.docx', new TextEncoder().encode('not a zip file')));
     await host.until(() => !shell.$('#error').hidden, 'error banner');
-    assert.equal(host.$('#error').textContent, 'Could not display sample.docx: Not a ZIP archive (end of central directory not found)');
+    assert.equal(host.$('#error').textContent, 'Could not display sample.docx: the file is damaged or uses ZIP features Document Lens does not read (no ZIP end of central directory)');
     assert.equal(page.isConnected, true);
     assert.deepEqual(viewerStyles(host), styles);
   });

@@ -29,6 +29,7 @@ export const RELATIONSHIP = {
   image: `${RELATIONSHIP_BASE}image`,
   fontTable: `${RELATIONSHIP_BASE}fontTable`,
   font: `${RELATIONSHIP_BASE}font`,
+  theme: `${RELATIONSHIP_BASE}theme`,
   altChunk: `${RELATIONSHIP_BASE}aFChunk`,
 } as const;
 
@@ -40,6 +41,7 @@ export const CONTENT_TYPE = {
   footer: `${CONTENT_TYPE_BASE}footer+xml`,
   footnotes: `${CONTENT_TYPE_BASE}footnotes+xml`,
   fontTable: `${CONTENT_TYPE_BASE}fontTable+xml`,
+  theme: 'application/vnd.openxmlformats-officedocument.theme+xml',
   obfuscatedFont: 'application/vnd.openxmlformats-officedocument.obfuscatedFont',
 } as const;
 

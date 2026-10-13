@@ -1,23 +1,32 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 import { Window } from 'happy-dom';
-import { checkModel, elementFactory } from '../../../src/webview/docx/render.ts';
+import { elementFactory } from '../../../src/webview/docx/render.ts';
 import { DOCX_LIMITS } from '../../../src/webview/docx/limits.ts';
+import { checkModel } from '../../../src/webview/docx/model.ts';
 
 interface Model {
   type: string;
+  id?: string;
   break?: string;
+  styleName?: string;
+  pageBreakBefore?: boolean;
   children?: Model[];
 }
 
 const text = (): Model => ({ type: 'text' });
 const paragraph = (...children: Model[]): Model => ({ type: 'paragraph', children: [{ type: 'run', children }] });
 const pageBreak = (): Model => paragraph({ type: 'break', break: 'page' });
-const parsed = (body: Model[], parts: unknown[] = []) => ({ documentPart: { body: { type: 'document', children: body } }, parts });
+const paragraphs = (count: number) => Array.from({ length: count }, () => paragraph(text()));
+const parsed = (body: Model[], more: Record<string, unknown> = {}) => ({ documentPart: { body: { type: 'document', children: body } }, parts: [], ...more });
+// Each paragraph of paragraphs() is 3 nodes and a header's root 1: 1000 of them make 3001 per page.
+const header = { rootElement: { type: 'header', children: paragraphs(1000) } };
+const footer = { rootElement: { type: 'footer', children: paragraphs(1000) } };
+const tooLarge = /the document is too large to preview \(about [\d,]+ elements; limit 2,000,000\)/;
 
 describe('docx model limits', () => {
   it('accepts an ordinary document', () => {
-    checkModel(parsed([paragraph(text()), pageBreak(), paragraph(text())], [{ rootElement: { type: 'header', children: [paragraph(text())] } }]));
+    checkModel(parsed([paragraph(text()), pageBreak(), paragraph(text())], { parts: [{ rootElement: { type: 'header', children: [paragraph(text())] } }] }));
   });
 
   it('refuses a document without a main part', () => {
@@ -35,13 +44,33 @@ describe('docx model limits', () => {
     assert.throws(() => checkModel(parsed([root])), new RegExp(`nested too deeply to preview \\(more than ${DOCX_LIMITS.maxDepth} levels\\)`));
   });
 
-  it('counts a header and a footer on every page', () => {
-    const header = { rootElement: { type: 'header', children: Array.from({ length: 1000 }, () => paragraph(text())) } };
-    const footer = { rootElement: { type: 'footer', children: Array.from({ length: 1000 }, () => paragraph(text())) } };
+  it('counts a header and a footer on every page started by a page break', () => {
     const pages = (count: number) => Array.from({ length: count - 1 }, pageBreak);
-    // Each header/footer paragraph is 3 nodes and the root 1: 3001 per page and part.
-    checkModel(parsed(pages(300), [header, footer]));
-    assert.throws(() => checkModel(parsed(pages(400), [header, footer])), /the document is too large to preview \(about 2,40\d,\d{3} elements; limit 2,000,000\)/);
+    checkModel(parsed(pages(300), { parts: [header, footer] }));
+    assert.throws(() => checkModel(parsed(pages(400), { parts: [header, footer] })), /about 2,40\d,\d{3} elements/);
+  });
+
+  it('counts pages started by paragraphs that break the page before them, directly or through their style', () => {
+    const direct = Array.from({ length: 400 }, (): Model => ({ type: 'paragraph', pageBreakBefore: true, children: [] }));
+    assert.throws(() => checkModel(parsed(direct, { parts: [header, footer] })), tooLarge);
+    // Heading2 is based on Heading1, which breaks the page; Loop is based on itself.
+    const styles = [
+      { id: 'Heading1', paragraphProps: { pageBreakBefore: true } },
+      { id: 'Heading2', basedOn: 'Heading1', paragraphProps: {} },
+      { id: 'Loop', basedOn: 'Loop', paragraphProps: {} },
+    ];
+    const styled = (styleName: string) => Array.from({ length: 400 }, (): Model => ({ type: 'paragraph', styleName, children: [] }));
+    assert.throws(() => checkModel(parsed(styled('Heading2'), { parts: [header, footer], stylesPart: { styles } })), tooLarge);
+    checkModel(parsed(styled('Loop'), { parts: [header, footer], stylesPart: { styles } }));
+  });
+
+  it('counts a note once for every reference to it', () => {
+    // A 300-paragraph note is 901 nodes.
+    const note = { id: '1', children: paragraphs(300) };
+    const references = (type: string, count: number) => [paragraph(...Array.from({ length: count }, (): Model => ({ type, id: '1' })))];
+    checkModel(parsed(references('footnoteReference', 2000), { footnotesPart: { notes: [note] } }));
+    assert.throws(() => checkModel(parsed(references('footnoteReference', 3000), { footnotesPart: { notes: [note] } })), tooLarge);
+    assert.throws(() => checkModel(parsed(references('endnoteReference', 3000), { endnotesPart: { notes: [note] } })), tooLarge);
   });
 });
 
