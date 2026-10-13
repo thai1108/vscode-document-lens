@@ -119,7 +119,7 @@ export function readWordDocument(bytes: Uint8Array, limits = DOC_LIMITS): WordDo
   const decoded = Math.min(wanted, limits.maxCharacters);
   const text = decodeText(word, pieces, decoded);
   const papx = new ParagraphTable(word, pieces, optionalFcLcb(table, fib.pairs, PAIR_PAPX_BIN_TABLE));
-  const hidden = hiddenRanges(word, pieces, optionalFcLcb(table, fib.pairs, PAIR_CHPX_BIN_TABLE), limits.maxHiddenRuns);
+  const hidden = hiddenRanges(word, pieces, decoded, optionalFcLcb(table, fib.pairs, PAIR_CHPX_BIN_TABLE), limits.maxHiddenRuns);
 
   return {
     text,
@@ -320,10 +320,10 @@ function fkpPage(word: Uint8Array, pn: number): Uint8Array | undefined {
 }
 
 /**
- * CP ranges of tracked deletions and hidden text, from the CHPX FKP pages: each page maps byte ranges of the
- * WordDocument stream to character property lists, and the pieces map those bytes back to CPs.
+ * CP ranges (below `cpLimit`) of tracked deletions and hidden text, from the CHPX FKP pages: each page maps byte ranges
+ * of the WordDocument stream to character property lists, and the pieces map those bytes back to CPs.
  */
-function hiddenRanges(word: Uint8Array, pieces: Piece[], plc: Uint8Array | undefined, maxRuns: number): [number, number][] {
+function hiddenRanges(word: Uint8Array, pieces: Piece[], cpLimit: number, plc: Uint8Array | undefined, maxRuns: number): [number, number][] {
   const runs: [number, number][] = [];
   for (const pn of new Set(readBinTable(plc).pages)) {
     const page = fkpPage(word, pn);
@@ -342,9 +342,13 @@ function hiddenRanges(word: Uint8Array, pieces: Piece[], plc: Uint8Array | undef
   }
   const bytes = mergeRanges(runs);
   const ranges: [number, number][] = [];
+  // Only decoded pieces count, which also bounds the work when pieces overlap in the stream.
   for (const piece of pieces) {
+    if (piece.cpStart >= cpLimit) {
+      break;
+    }
     const size = piece.compressed ? 1 : 2;
-    const end = piece.offset + (piece.cpEnd - piece.cpStart) * size;
+    const end = piece.offset + (Math.min(piece.cpEnd, cpLimit) - piece.cpStart) * size;
     for (let i = Math.max(0, lastAtOrBefore(bytes.length, (j) => bytes[j]?.[0] ?? 0, piece.offset)); i < bytes.length; i++) {
       const [from, to] = bytes[i] ?? [0, 0];
       if (from >= end) {

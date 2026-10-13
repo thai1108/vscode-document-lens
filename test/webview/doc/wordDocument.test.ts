@@ -119,6 +119,8 @@ describe('readWordDocument', () => {
       document.stories.map((story) => [story.kind, story.start, story.end]),
       [['main', 0, 30]],
     );
+    // The tracked deletion lies past the cut, so it is not looked up.
+    assert.deepEqual(document.hidden, []);
   });
 });
 
