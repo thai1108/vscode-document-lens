@@ -10,6 +10,12 @@ const FIB_FC_LCB = 0x9a;
 const PAIR_PAPX = 13;
 const PAIR_CLX = 33;
 
+function u32(values: number[]): Buffer {
+  const bytes = Buffer.alloc(values.length * 4);
+  values.forEach((value, i) => bytes.writeUInt32LE(value, i * 4));
+  return bytes;
+}
+
 function doc(input: Partial<WordDocumentInput> = {}): Buffer {
   return writeWordDocument({ body: ['Hello\r', 'world\r'], ...input });
 }
@@ -94,8 +100,64 @@ describe('readWordDocument', () => {
       },
     });
     assert.deepEqual(readWordDocument(outside).hidden, []);
+  });
+
+  it('drops text that is deleted or hidden, whichever property comes last', () => {
+    const document = readWordDocument(
+      doc({
+        body: ['a', { text: 'B', deleted: true, hidden: false }, 'c', { text: 'D', deleted: false, hidden: true }, 'e', { text: 'F', deleted: false, hidden: false }, '\r'],
+      }),
+    );
+    assert.deepEqual(
+      document.hidden.map(([from, to]) => document.text.slice(from, to)),
+      ['B', 'D'],
+    );
+  });
+
+  it('examines a limited number of character runs', () => {
+    // Runs: 'a ', 'gone' (deleted), ' b ', 'too' (hidden), '\r'.
     const capped = doc({ body: ['a ', { text: 'gone', deleted: true }, ' b ', { text: 'too', hidden: true }, '\r'] });
-    assert.equal(readWordDocument(capped, { ...DOC_LIMITS, maxHiddenRuns: 1 }).hidden.length, 1);
+    assert.equal(readWordDocument(capped, { ...DOC_LIMITS, maxCharacterRuns: 1 }).hidden.length, 0);
+    assert.equal(readWordDocument(capped, { ...DOC_LIMITS, maxCharacterRuns: 2 }).hidden.length, 1);
+    assert.equal(readWordDocument(capped).hidden.length, 2);
+  });
+
+  it('ignores a character bin table with more pages than the WordDocument stream holds', () => {
+    const entries = 200_000;
+    const plc = Buffer.alloc((entries + 1) * 4 + entries * 4);
+    for (let i = 0; i < entries; i++) {
+      plc.writeUInt32LE(i, (entries + 1) * 4 + i * 4);
+    }
+    const started = performance.now();
+    const document = readWordDocument(doc({ body: ['a ', { text: 'gone', deleted: true }, '\r'], tablePairs: { 12: plc } }));
+    assert.deepEqual(document.hidden, []);
+    assert.ok(performance.now() - started < 1000);
+  });
+
+  it('keeps only automatically numbered note references inside the decoded main text', () => {
+    // References at CPs 1 (auto), 3 (custom mark "*") and 5 (auto), then 10 (past the main text), then the last CP.
+    const refs = (cps: number[], autos: number[]) => {
+      const frds = Buffer.alloc(autos.length * 2);
+      autos.forEach((auto, i) => frds.writeInt16LE(auto, i * 2));
+      return Buffer.concat([u32(cps), frds]);
+    };
+    const document = readWordDocument(doc({ body: ['a\x02b*c\x02.\r'], tablePairs: { 2: refs([1, 3, 5, 10, 11], [1, 0, 1, 1]) } }));
+    assert.deepEqual(document.footnoteRefs, [1, 5]);
+    // Out-of-order CPs end the table.
+    const shuffled = readWordDocument(doc({ body: ['a\x02b\x02c\x02.\r'], tablePairs: { 46: refs([5, 1, 3, 9], [1, 1, 1]) } }));
+    assert.deepEqual(shuffled.endnoteRefs, [5]);
+  });
+
+  it('reads an oversized reference table only as far as the main text goes', () => {
+    const count = 1_000_000;
+    const cps = Array.from({ length: count + 1 }, (_, i) => i);
+    const plc = Buffer.concat([u32(cps), Buffer.alloc(count * 2, 1)]);
+    const started = performance.now();
+    const document = readWordDocument(doc({ body: ['x\r'], tablePairs: { 2: plc } }));
+    assert.deepEqual(document.footnoteRefs, [0, 1]);
+    assert.ok(performance.now() - started < 1000);
+    const cut = readWordDocument(writeWordDocument(SAMPLE_DOC), { ...DOC_LIMITS, maxCharacters: 30 });
+    assert.deepEqual(cut.footnoteRefs, []);
   });
 
   it('uses the 0Table stream when the FIB says so', () => {

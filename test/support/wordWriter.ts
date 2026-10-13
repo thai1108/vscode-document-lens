@@ -4,7 +4,10 @@
 // packed in a compound file.
 import { writeCompoundFile, type CompoundFileOptions, type CompoundStream } from './compoundFileWriter.ts';
 
-/** One piece of the main text; a row becomes cells ending in 0x07 plus the row-end mark. */
+/**
+ * One piece of the main text; a row becomes cells ending in 0x07 plus the row-end mark. `deleted` and `hidden` write
+ * sprmCFRMarkDel and sprmCFVanish (in that order) with operand 1 for true and 0 for false.
+ */
 export type DocItem = string | { text: string; unicode?: boolean; deleted?: boolean; hidden?: boolean } | { row: string[] };
 
 export interface WordDocumentInput {
@@ -24,6 +27,8 @@ export interface WordDocumentInput {
   clxPropertyLists?: number[][];
   /** Edits the streams just before they are packed (e.g. to corrupt the piece table). */
   edit?(streams: { word: Buffer; table: Buffer }): void;
+  /** Structures to write in the table stream at these fc/lcb pair indexes, replacing the writer's own. */
+  tablePairs?: Record<number, Uint8Array>;
   extraStreams?: CompoundStream[];
   compound?: CompoundFileOptions;
 }
@@ -44,8 +49,8 @@ const PAIR_CLX = 33;
 const PAIR_COUNT = 0x5d;
 const SPECIAL = new Set([0x01, 0x02, 0x08, 0x13, 0x14, 0x15]);
 const SPRM_SPECIAL = [0x55, 0x08, 0x01];
-const SPRM_DELETED = [0x00, 0x08, 0x01];
-const SPRM_HIDDEN = [0x3c, 0x08, 0x01];
+const SPRM_DELETED = [0x00, 0x08];
+const SPRM_HIDDEN = [0x3c, 0x08];
 const FIELD_TYPES: Record<string, number> = { HYPERLINK: 88, PAGE: 33, DATE: 31 };
 
 const cp1252Bytes = (() => {
@@ -92,7 +97,8 @@ export function writeWordDocument(input: WordDocumentInput): Buffer {
     } else if ('row' in item) {
       addPiece(item.row.map((cell) => `${cell}\x07`).join('') + '\x07', false, item.row.length);
     } else {
-      addPiece(item.text, item.unicode ?? false, undefined, [...(item.deleted ? SPRM_DELETED : []), ...(item.hidden ? SPRM_HIDDEN : [])]);
+      const toggle = (sprm: number[], value: boolean | undefined) => (value === undefined ? [] : [...sprm, value ? 1 : 0]);
+      addPiece(item.text, item.unicode ?? false, undefined, [...toggle(SPRM_DELETED, item.deleted), ...toggle(SPRM_HIDDEN, item.hidden)]);
     }
   }
   const ccpText = cp;
@@ -171,7 +177,10 @@ export function writeWordDocument(input: WordDocumentInput): Buffer {
   const pairs = new Map<number, [number, number]>();
   const put = (index: number, bytes: number[]) => {
     pairs.set(index, [table.length, bytes.length]);
-    table.push(...bytes);
+    // A loop, not push(...bytes): large structures would overflow the call stack.
+    for (const byte of bytes) {
+      table.push(byte);
+    }
   };
   put(PAIR_STSHF, stylesheet());
   if (footnotes.length) {
@@ -190,6 +199,9 @@ export function writeWordDocument(input: WordDocumentInput): Buffer {
   }
   put(PAIR_DOP, new Array<number>(500).fill(0));
   put(PAIR_CLX, clx(pieces, cp, input.clxPropertyLists ?? []));
+  for (const [index, bytes] of Object.entries(input.tablePairs ?? {})) {
+    put(Number(index), Array.from(bytes));
+  }
 
   const wordBuffer = Buffer.from(word);
   writeFib(wordBuffer, input, pairs, { ccpText, ccpFtn });

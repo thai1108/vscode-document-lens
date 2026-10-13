@@ -157,6 +157,33 @@ describe('layoutDocument', () => {
     assert.deepEqual(mainBlocks(text, { overrides }), [[['a', '', 'c']]]);
   });
 
+  it('wraps rows wider than the column limit', () => {
+    const blocks = main('a\x07'.repeat(100) + '\x07After\r').stories[0]?.blocks ?? [];
+    const table = blocks[0];
+    assert.equal(table?.type, 'table');
+    assert.deepEqual(
+      table?.type === 'table' ? table.rows.map((row) => row.length) : [],
+      [63, 37],
+    );
+    assert.deepEqual(show(blocks.slice(1)), ['After']);
+  });
+
+  it('numbers only automatic note references, as Word does around custom marks', () => {
+    const layout = layoutDocument(
+      fake(
+        [
+          { kind: 'main', text: 'a\x02b*c\x02.\r' },
+          { kind: 'footnotes', text: '\x02A\r*B\r\x02C\r' },
+        ],
+        { footnoteRefs: [1, 5] },
+      ),
+    );
+    assert.deepEqual(
+      layout.stories.map((story) => show(story.blocks)),
+      [['a^1b*c^2.'], ['^1A', '*B', '^2C']],
+    );
+  });
+
   it('separates tables split by a page break and closes a table at the end of the story', () => {
     assert.deepEqual(mainBlocks('a\x07\x07\x0cb\x07\x07'), [[['a']], '---', [['b']]]);
   });
@@ -216,13 +243,34 @@ describe('layoutDocument', () => {
     );
   });
 
-  it('keeps an empty main story and stops at the paragraph limit', () => {
+  it('keeps an empty main story and stops when the element budget runs out', () => {
     assert.deepEqual(main('').stories, [{ kind: 'main', blocks: [] }]);
-    const layout = layoutDocument(fake([{ kind: 'main', text: 'p\r'.repeat(10) }, { kind: 'footnotes', text: '\x02n\r' }]), { ...LAYOUT_LIMITS, maxParagraphs: 4 });
+    // Each paragraph is two elements: the paragraph and its text run.
+    const layout = layoutDocument(fake([{ kind: 'main', text: 'p\r'.repeat(10) }, { kind: 'footnotes', text: '\x02n\r' }]), { ...LAYOUT_LIMITS, maxElements: 8 });
     assert.equal(layout.truncated, true);
-    // Four whole paragraphs, then the text of the one whose mark was over the limit.
-    assert.deepEqual(show(layout.stories[0]?.blocks ?? []), ['p', 'p', 'p', 'p', 'p']);
+    assert.deepEqual(show(layout.stories[0]?.blocks ?? []), ['p', 'p', 'p', 'p']);
     assert.equal(layout.stories.length, 1);
+  });
+
+  it('counts page breaks against the element budget', () => {
+    const layout = layoutDocument(fake([{ kind: 'main', text: 'a\x0c'.repeat(100) + '\r' }]), { ...LAYOUT_LIMITS, maxElements: 30 });
+    assert.equal(layout.truncated, true);
+    // 'a' (paragraph + run) and its page break: three elements per pair.
+    assert.deepEqual(show(layout.stories[0]?.blocks ?? []), Array.from({ length: 10 }, () => ['a', '---']).flat());
+  });
+
+  it('counts link and note runs against the element budget', () => {
+    const layout = layoutDocument(fake([{ kind: 'main', text: 'x\r' }, { kind: 'footnotes', text: '\x02a'.repeat(1000) + '\r' }]), { ...LAYOUT_LIMITS, maxElements: 50 });
+    assert.equal(layout.truncated, true);
+    const runs = layout.stories.flatMap((story) => story.blocks).reduce((count, block) => count + (block.type === 'paragraph' ? block.runs.length : 0), 0);
+    assert.ok(runs <= 50, `${runs} runs`);
+  });
+
+  it('counts the characters it shows, note numbers included', () => {
+    const layout = layoutDocument(fake([{ kind: 'main', text: 'x\r' }, { kind: 'footnotes', text: '\x02'.repeat(10_000) + '\r' }]), { ...LAYOUT_LIMITS, maxOutputCharacters: 100 });
+    assert.equal(layout.truncated, true);
+    const shown = layout.stories.flatMap((story) => story.blocks).reduce((count, block) => count + (block.type === 'paragraph' ? block.runs.reduce((sum, run) => sum + run.text.length, 0) : 0), 0);
+    assert.ok(shown <= 100, `${shown} characters`);
   });
 
   it('passes on truncation from the document', () => {

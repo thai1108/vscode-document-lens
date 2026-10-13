@@ -123,3 +123,22 @@ test('a very long .doc is cut at the character limit with a notice', async ({ pa
     await site.close();
   }
 });
+
+for (const [name, body, check] of [
+  ['wide-row.doc', 'a\x07'.repeat(99_990) + '\x07after\r', '.doc-table tr'],
+  ['page-breaks.doc', 'a\x0c'.repeat(150_000) + '\r', '.doc-page-break'],
+] as const) {
+  test(`${name}: a hostile layout is cut at the element limit and renders without freezing`, async ({ page }) => {
+    const { site, problems } = await open(page, writeDoc(name, { body: [body] }));
+    try {
+      await expectShellLoaded(page, name);
+      await expect(page.locator('#notice')).toHaveText(`${NOTICE} It is very long, so only its beginning is shown.`);
+      expect(await page.locator(check).count()).toBeGreaterThan(1000);
+      const widest = await page.locator('.doc-table tr').evaluateAll((rows) => Math.max(0, ...rows.map((row) => row.childElementCount)));
+      expect(widest).toBeLessThanOrEqual(63);
+      expect(problems).toEqual([]);
+    } finally {
+      await site.close();
+    }
+  });
+}

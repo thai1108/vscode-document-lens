@@ -9,8 +9,8 @@ export const DOC_LIMITS = {
   maxPieces: 1_000_000,
   /** Characters decoded across all stories; the rest of a longer document is cut with a notice. */
   maxCharacters: 3_000_000,
-  /** Runs of deleted or hidden text left out; further ones are shown. */
-  maxHiddenRuns: 100_000,
+  /** Character property runs examined for deleted or hidden text; text after the last one examined is shown. */
+  maxCharacterRuns: 500_000,
 };
 
 const WORD_97_IDENT = 0xa5ec;
@@ -74,7 +74,10 @@ export interface WordDocument {
   text: string;
   truncated: boolean;
   stories: StoryRange[];
-  /** CPs of the footnote and endnote reference marks in the main text. */
+  /**
+   * Ascending CPs of the automatically numbered footnote and endnote references in the decoded main text; a reference's
+   * number is its index + 1 (references with a custom mark are plain text and take no number).
+   */
   footnoteRefs: readonly number[];
   endnoteRefs: readonly number[];
   /** Properties of the paragraph whose mark is at `cp`; undefined when the file has no usable paragraph table. */
@@ -119,14 +122,15 @@ export function readWordDocument(bytes: Uint8Array, limits = DOC_LIMITS): WordDo
   const decoded = Math.min(wanted, limits.maxCharacters);
   const text = decodeText(word, pieces, decoded);
   const papx = new ParagraphTable(word, pieces, optionalFcLcb(table, fib.pairs, PAIR_PAPX_BIN_TABLE));
-  const hidden = hiddenRanges(word, pieces, decoded, optionalFcLcb(table, fib.pairs, PAIR_CHPX_BIN_TABLE), limits.maxHiddenRuns);
+  const hidden = hiddenRanges(word, pieces, decoded, optionalFcLcb(table, fib.pairs, PAIR_CHPX_BIN_TABLE), limits.maxCharacterRuns);
+  const mainEnd = Math.min(fib.lengths[3] ?? 0, decoded);
 
   return {
     text,
     truncated: decoded < wanted,
     stories: stories.map((story) => ({ ...story, end: Math.min(story.end, decoded) })).filter((story) => story.end > story.start),
-    footnoteRefs: noteRefs(optionalFcLcb(table, fib.pairs, PAIR_FOOTNOTE_REFS)),
-    endnoteRefs: noteRefs(optionalFcLcb(table, fib.pairs, PAIR_ENDNOTE_REFS)),
+    footnoteRefs: noteRefs(optionalFcLcb(table, fib.pairs, PAIR_FOOTNOTE_REFS), mainEnd),
+    endnoteRefs: noteRefs(optionalFcLcb(table, fib.pairs, PAIR_ENDNOTE_REFS), mainEnd),
     paragraphAt: (cp) => papx.at(cp),
     hidden,
   };
@@ -283,22 +287,39 @@ function decodeText(word: Uint8Array, pieces: Piece[], end: number): string {
   return chunks.join('');
 }
 
-/** CPs from a PlcfFndRef / PlcfEndRef (n + 1 CPs, then n 2-byte FRDs). */
-function noteRefs(plc: Uint8Array | undefined): number[] {
+/**
+ * The automatically numbered references (FRD.nAuto > 0) of a PlcfFndRef / PlcfEndRef (n + 1 CPs, then n 2-byte FRDs)
+ * below `end`. The CPs ascend, so reading stops at the first one that does not: at most `end` entries are read.
+ */
+function noteRefs(plc: Uint8Array | undefined, end: number): number[] {
   if (!plc || plc.byteLength < 10 || (plc.byteLength - 4) % 6 !== 0) {
     return [];
   }
   const view = new DataView(plc.buffer, plc.byteOffset, plc.byteLength);
+  const count = (plc.byteLength - 4) / 6;
   const refs: number[] = [];
-  for (let i = 0; i < (plc.byteLength - 4) / 6; i++) {
-    refs.push(view.getUint32(i * 4, true));
+  let previous = -1;
+  for (let i = 0; i < count; i++) {
+    const cp = view.getUint32(i * 4, true);
+    if (cp >= end || cp <= previous) {
+      break;
+    }
+    previous = cp;
+    if (view.getInt16((count + 1) * 4 + i * 2, true) > 0) {
+      refs.push(cp);
+    }
   }
   return refs;
 }
 
-/** A bin table (PlcBteChpx / PlcBtePapx): n + 1 stream offsets, then the FKP page number of each of the n ranges. */
-function readBinTable(plc: Uint8Array | undefined): { boundaries: Uint32Array; pages: Uint32Array } {
-  const count = plc && plc.byteLength >= 12 && (plc.byteLength - 4) % 8 === 0 ? (plc.byteLength - 4) / 8 : 0;
+/**
+ * A bin table (PlcBteChpx / PlcBtePapx): n + 1 stream offsets, then the FKP page number of each of the n ranges. Each
+ * range has its own 512-byte page in the WordDocument stream, so a table with more entries than the stream has pages
+ * is damaged and ignored.
+ */
+function readBinTable(plc: Uint8Array | undefined, word: Uint8Array): { boundaries: Uint32Array; pages: Uint32Array } {
+  const entries = plc && plc.byteLength >= 12 && (plc.byteLength - 4) % 8 === 0 ? (plc.byteLength - 4) / 8 : 0;
+  const count = entries <= word.byteLength / FKP_SIZE ? entries : 0;
   const boundaries = new Uint32Array(count + 1);
   const pages = new Uint32Array(count);
   if (plc && count > 0) {
@@ -319,20 +340,47 @@ function fkpPage(word: Uint8Array, pn: number): Uint8Array | undefined {
   return start + FKP_SIZE <= word.byteLength ? word.subarray(start, start + FKP_SIZE) : undefined;
 }
 
+/** Byte ranges [start, end) of the WordDocument stream that hold the characters below `cpLimit`, merged. */
+function decodedBytes(pieces: Piece[], cpLimit: number): [number, number][] {
+  const ranges: [number, number][] = [];
+  for (const piece of pieces) {
+    if (piece.cpStart >= cpLimit) {
+      break;
+    }
+    ranges.push([piece.offset, piece.offset + (Math.min(piece.cpEnd, cpLimit) - piece.cpStart) * (piece.compressed ? 1 : 2)]);
+  }
+  return mergeRanges(ranges);
+}
+
+/** Whether [start, end) overlaps one of the sorted, disjoint `ranges`. */
+function overlaps(ranges: [number, number][], start: number, end: number): boolean {
+  const i = lastAtOrBefore(ranges.length, (j) => ranges[j]?.[0] ?? 0, start);
+  const candidate = ranges[i] ?? [0, 0];
+  const next = ranges[i + 1];
+  return (i >= 0 && candidate[1] > start) || (next !== undefined && next[0] < end);
+}
+
 /**
  * CP ranges (below `cpLimit`) of tracked deletions and hidden text, from the CHPX FKP pages: each page maps byte ranges
- * of the WordDocument stream to character property lists, and the pieces map those bytes back to CPs.
+ * of the WordDocument stream to character property lists, and the pieces map those bytes back to CPs. Only pages that
+ * cover decoded text are read, and at most `maxRuns` runs are examined.
  */
 function hiddenRanges(word: Uint8Array, pieces: Piece[], cpLimit: number, plc: Uint8Array | undefined, maxRuns: number): [number, number][] {
+  const decoded = decodedBytes(pieces, cpLimit);
+  const { boundaries, pages } = readBinTable(plc, word);
+  const seen = new Set<number>();
   const runs: [number, number][] = [];
-  for (const pn of new Set(readBinTable(plc).pages)) {
+  let examined = 0;
+  for (let index = 0; index < pages.length && examined < maxRuns; index++) {
+    const pn = pages[index] ?? 0;
     const page = fkpPage(word, pn);
     const crun = page?.[FKP_SIZE - 1] ?? 0;
-    if (!page || (crun + 1) * 4 + crun > FKP_SIZE - 1) {
+    if (!page || seen.has(pn) || (crun + 1) * 4 + crun > FKP_SIZE - 1 || !overlaps(decoded, boundaries[index] ?? 0, boundaries[index + 1] ?? 0)) {
       continue;
     }
+    seen.add(pn);
     const view = new DataView(page.buffer, page.byteOffset, FKP_SIZE);
-    for (let i = 0; i < crun && runs.length < maxRuns; i++) {
+    for (let i = 0; i < crun && examined < maxRuns; i++, examined++) {
       const offset = (page[(crun + 1) * 4 + i] ?? 0) * 2;
       // A Chpx is cb, then cb bytes of sprms.
       if (offset > 0 && isHiddenText(page, offset + 1, offset + 1 + (page[offset] ?? 0))) {
@@ -364,15 +412,20 @@ function hiddenRanges(word: Uint8Array, pieces: Piece[], cpLimit: number, plc: U
   return mergeRanges(ranges);
 }
 
+/** Whether a character property list marks text as a tracked deletion or as hidden (either is enough). */
 function isHiddenText(page: Uint8Array, start: number, end: number): boolean {
+  let deleted = false;
   let hidden = false;
   forEachSprm(page, start, Math.min(end, FKP_SIZE), (sprm, operand) => {
     // Toggle operands: 0 off, 1 on, 0x80 as in the style, 0x81 the opposite of the style (whose value is not read).
-    if (sprm === SPRM_DELETED || sprm === SPRM_HIDDEN) {
-      hidden = operand === 1 || operand === 0x81;
+    const on = operand === 1 || operand === 0x81;
+    if (sprm === SPRM_DELETED) {
+      deleted = on;
+    } else if (sprm === SPRM_HIDDEN) {
+      hidden = on;
     }
   });
-  return hidden;
+  return deleted || hidden;
 }
 
 /** Sorts ranges and joins overlapping or touching ones. */
@@ -403,7 +456,7 @@ class ParagraphTable {
   constructor(word: Uint8Array, pieces: Piece[], plc: Uint8Array | undefined) {
     this.word = word;
     this.pieces = pieces;
-    const table = readBinTable(plc);
+    const table = readBinTable(plc, word);
     this.boundaries = table.boundaries;
     this.pages = table.pages;
   }

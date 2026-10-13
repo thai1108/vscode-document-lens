@@ -16,15 +16,17 @@ export function docViewer(limits = { ...DOC_LIMITS, ...LAYOUT_LIMITS }): Viewer 
       content = context.content;
       const scrollTop = content.scrollTop;
       let layout: DocumentLayout;
+      let page: HTMLElement;
       try {
         layout = layoutDocument(readWordDocument(document.data, limits), limits);
+        page = renderDocument(layout);
       } catch (error) {
         // Leave no stale text or notice under the error banner.
         content.replaceChildren();
         context.showNotice(null);
         throw error;
       }
-      content.replaceChildren(renderDocument(layout));
+      content.replaceChildren(page);
       if (reload) {
         content.scrollTop = scrollTop;
       }

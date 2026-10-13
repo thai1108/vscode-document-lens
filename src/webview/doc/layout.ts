@@ -6,8 +6,15 @@ import { externalUrl } from '../../protocol.ts';
 import type { ParagraphProperties, StoryKind, WordDocument } from './wordDocument.ts';
 
 export const LAYOUT_LIMITS = {
-  /** Paragraphs (including table cells) across all stories; a longer document is cut with a notice. */
-  maxParagraphs: 100_000,
+  /**
+   * Elements across all stories, each of which becomes a DOM node: paragraphs, tables, rows, cells, page breaks and text
+   * runs. A longer document is cut with a notice.
+   */
+  maxElements: 200_000,
+  /** Characters shown across all stories, note numbers included; a longer document is cut with a notice. */
+  maxOutputCharacters: 3_000_000,
+  /** Cells per table row: Word 97–2003 tables have at most 63 columns, so further cells wrap to a new row. */
+  maxColumns: 63,
   /** Nesting of fields inside fields; deeper begin marks are ignored. */
   maxFieldDepth: 64,
   /** Characters of a field's code kept to look for a HYPERLINK target. */
@@ -61,8 +68,14 @@ const TAB = 0x09;
 const NOTE_REF = 0x02;
 const NON_BREAKING_HYPHEN = 0x1e;
 
+/** What is left of LAYOUT_LIMITS.maxElements and maxOutputCharacters, shared by all stories. */
+interface Budget {
+  elements: number;
+  characters: number;
+}
+
 export function layoutDocument(document: WordDocument, limits = LAYOUT_LIMITS): DocumentLayout {
-  const budget = { paragraphs: limits.maxParagraphs };
+  const budget: Budget = { elements: limits.maxElements, characters: limits.maxOutputCharacters };
   const stories: Story[] = [];
   let truncated = document.truncated;
   for (const range of document.stories) {
@@ -71,6 +84,8 @@ export function layoutDocument(document: WordDocument, limits = LAYOUT_LIMITS): 
     const blocks = builder.finish();
     if (blocks.length > 0 || range.kind === 'main') {
       stories.push({ kind: range.kind, blocks });
+      // A labelled section around the story.
+      budget.elements -= range.kind === 'main' ? 0 : 2;
     }
     if (!complete) {
       truncated = true;
@@ -89,10 +104,9 @@ interface Field {
 class StoryBuilder {
   private readonly kind: StoryKind;
   private readonly document: WordDocument;
-  private readonly budget: { paragraphs: number };
+  private readonly budget: Budget;
   private readonly limits: typeof LAYOUT_LIMITS;
   private readonly blocks: Block[] = [];
-  private readonly noteNumbers = new Map<number, string>();
   private runs: Run[] = [];
   private chars: string[] = [];
   private runHref: string | undefined;
@@ -110,22 +124,21 @@ class StoryBuilder {
   private previousMark: 'paragraph' | 'cell' | 'row' | undefined;
   private readonly seenText = new Set<string>();
 
-  constructor(kind: StoryKind, document: WordDocument, budget: { paragraphs: number }, limits: typeof LAYOUT_LIMITS) {
+  constructor(kind: StoryKind, document: WordDocument, budget: Budget, limits: typeof LAYOUT_LIMITS) {
     this.kind = kind;
     this.document = document;
     this.budget = budget;
     this.limits = limits;
-    if (kind === 'main') {
-      document.footnoteRefs.forEach((cp, i) => this.noteNumbers.set(cp, String(i + 1)));
-      document.endnoteRefs.forEach((cp, i) => this.noteNumbers.set(cp, String(i + 1)));
-    }
   }
 
-  /** Lays out CPs start..end; false when the paragraph budget ran out first. */
+  /** Lays out CPs start..end; false when the element or character budget ran out first. */
   read(start: number, end: number): boolean {
     const { text, hidden } = this.document;
     let next = hidden.findIndex(([, stop]) => stop > start);
     for (let cp = start; cp < end; cp++) {
+      if (this.budget.elements <= 0 || this.budget.characters <= 0) {
+        return false;
+      }
       const range = hidden[next];
       if (range && range[0] <= cp) {
         cp = range[1] - 1;
@@ -136,9 +149,6 @@ class StoryBuilder {
       if (code === FIELD_BEGIN || code === FIELD_SEPARATOR || code === FIELD_END) {
         this.field(code);
       } else if (code === PARAGRAPH_MARK || code === CELL_MARK) {
-        if (this.budget.paragraphs-- <= 0) {
-          return false;
-        }
         this.endParagraph(cp, code === CELL_MARK);
       } else if (this.hiddenFields > 0) {
         const field = this.fields.at(-1);
@@ -201,10 +211,21 @@ class StoryBuilder {
     this.href = this.fields.findLast((candidate) => candidate.href)?.href;
   }
 
+  /**
+   * An automatically numbered note reference (0x02). In the main text its number is its place among the automatic
+   * references of its kind; in a note story, the notes' own 0x02 marks come in the same order. Custom marks are text.
+   */
   private noteRef(cp: number): void {
-    const number = this.kind === 'main' ? this.noteNumbers.get(cp) : this.kind === 'footnotes' || this.kind === 'endnotes' ? String(++this.notesSeen) : undefined;
-    if (number) {
-      this.append(number, true);
+    let index = -1;
+    if (this.kind === 'main') {
+      const { footnoteRefs, endnoteRefs } = this.document;
+      index = indexOf(footnoteRefs, cp);
+      index = index >= 0 ? index : indexOf(endnoteRefs, cp);
+    } else if (this.kind === 'footnotes' || this.kind === 'endnotes') {
+      index = this.notesSeen++;
+    }
+    if (index >= 0) {
+      this.append(String(index + 1), true);
     }
   }
 
@@ -215,6 +236,7 @@ class StoryBuilder {
       this.runNote = noteRef;
     }
     this.chars.push(text);
+    this.budget.characters -= text.length;
     this.afterBreak = false;
   }
 
@@ -228,6 +250,7 @@ class StoryBuilder {
         run.noteRef = true;
       }
       this.runs.push(run);
+      this.budget.elements--;
       this.chars = [];
     }
   }
@@ -236,6 +259,7 @@ class StoryBuilder {
     this.flushRun();
     const paragraph: Paragraph = { type: 'paragraph', runs: this.runs };
     this.runs = [];
+    this.budget.elements--;
     return paragraph;
   }
 
@@ -251,7 +275,11 @@ class StoryBuilder {
         this.previousMark = 'row';
       } else {
         this.cell.push(paragraph);
+        if (this.row.length >= this.limits.maxColumns) {
+          this.pushRow();
+        }
         this.row.push(this.cell);
+        this.budget.elements--;
         this.cell = [];
         this.previousMark = 'cell';
       }
@@ -279,11 +307,21 @@ class StoryBuilder {
   private endRow(): void {
     if (this.cell.length > 0) {
       this.row.push(this.cell);
+      this.budget.elements--;
       this.cell = [];
     }
+    this.pushRow();
+  }
+
+  /** Adds the cells so far as a row of the current table, starting the table if needed. */
+  private pushRow(): void {
     if (this.row.length > 0) {
-      this.table ??= { type: 'table', rows: [] };
+      if (!this.table) {
+        this.table = { type: 'table', rows: [] };
+        this.budget.elements--;
+      }
       this.table.rows.push(this.row);
+      this.budget.elements--;
       this.row = [];
     }
   }
@@ -319,8 +357,28 @@ class StoryBuilder {
     }
     this.closeTable();
     this.blocks.push({ type: 'pageBreak' });
+    this.budget.elements--;
     this.afterBreak = true;
   }
+}
+
+/** Binary search in ascending `values`: the index of `value`, or -1. */
+function indexOf(values: readonly number[], value: number): number {
+  let low = 0;
+  let high = values.length - 1;
+  while (low <= high) {
+    const mid = (low + high) >> 1;
+    const candidate = values[mid] ?? 0;
+    if (candidate === value) {
+      return mid;
+    }
+    if (candidate < value) {
+      low = mid + 1;
+    } else {
+      high = mid - 1;
+    }
+  }
+  return -1;
 }
 
 /** The http(s) target of a HYPERLINK field code such as ` HYPERLINK "https://example.com" \t "_blank" `. */

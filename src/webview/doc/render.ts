@@ -25,7 +25,10 @@ export function renderDocument(layout: DocumentLayout): HTMLElement {
       target.append(element('h2', { className: 'doc-story-label', text: STORY_LABELS[story.kind] }));
       paper.append(target);
     }
-    target.append(...story.blocks.map(renderBlock));
+    // One append per node: spreading a long list into append() overflows the call stack.
+    for (const block of story.blocks) {
+      target.append(renderBlock(block));
+    }
   }
   if (!paper.textContent?.trim()) {
     paper.replaceChildren(element('p', { className: 'doc-empty', text: 'This document has no text.' }));
@@ -47,7 +50,9 @@ function renderBlock(block: Block): HTMLElement {
         const tr = element('tr');
         for (const cell of row) {
           const td = element('td');
-          td.append(...cell.map(renderParagraph));
+          for (const paragraph of cell) {
+            td.append(renderParagraph(paragraph));
+          }
           tr.append(td);
         }
         body.append(tr);
