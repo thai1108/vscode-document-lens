@@ -7,5 +7,8 @@ export const pptx: FormatDefinition = {
   extensions: ['.pptx'],
   maxFileSize: MAX_FILE_SIZE.pptx,
   webview: 'pptx',
+  // Pictures are blob: URLs, which the base policy allows; the viewer needs nothing more.
+  // Only the current slide's text is in the page, so the find widget would miss every other slide.
+  findWidget: false,
   check: (bytes) => checkOoxmlPackage(bytes, '.pptx'),
 };

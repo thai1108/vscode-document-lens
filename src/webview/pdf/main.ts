@@ -1,5 +1,9 @@
+import workerSource from 'pdfjs-assets:worker';
+import files from 'pdfjs-assets:files';
 import '../shell/shell.css';
+import './pdf.css';
 import { startViewer } from '../shell/app.ts';
-import { placeholderViewer } from '../shell/placeholder.ts';
+import { startWorker } from './assets.ts';
+import { createPdfViewer } from './viewer.ts';
 
-startViewer(placeholderViewer('.pdf document'));
+startViewer(createPdfViewer({ startWorker: () => startWorker(workerSource), files }));
