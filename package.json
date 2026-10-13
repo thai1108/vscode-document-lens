@@ -133,7 +133,8 @@
   "dependencies": {
     "docx-preview": "0.4.1",
     "jszip": "3.10.2",
-    "pdfjs-dist": "6.3.289"
+    "pdfjs-dist": "6.3.289",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
