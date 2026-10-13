@@ -37,7 +37,6 @@ export function createPptxViewer(): Viewer {
 
 class PresentationView {
   private readonly context: ViewerContext;
-  private readonly root: HTMLElement;
   private readonly list: HTMLElement;
   private readonly stage: HTMLElement;
   private readonly frame: HTMLElement;
@@ -76,9 +75,9 @@ class PresentationView {
     inner.append(this.frame);
     this.stage = element('div', { className: 'pptx-stage', attributes: { id: 'pptx-stage' } });
     this.stage.append(inner);
-    this.root = element('div', { className: 'pptx-viewer', attributes: { id: 'pptx-viewer' } });
-    this.root.append(this.list, this.stage);
-    context.content.replaceChildren(this.root);
+    const root = element('div', { className: 'pptx-viewer', attributes: { id: 'pptx-viewer' } });
+    root.append(this.list, this.stage);
+    context.content.replaceChildren(root);
 
     this.previous.addEventListener('click', () => this.go(this.index - 1));
     this.next.addEventListener('click', () => this.go(this.index + 1));
@@ -180,7 +179,7 @@ class PresentationView {
   private go(index: number): void {
     const count = this.deck?.slideParts.length ?? 0;
     const target = Math.max(0, Math.min(count - 1, index));
-    if (count === 0 || target === this.index) {
+    if (count === 0 || !Number.isInteger(target) || target === this.index) {
       return;
     }
     this.index = target;
@@ -328,23 +327,26 @@ class PresentationView {
       this.updateNotice();
       return;
     }
+    // Another slide may be chosen while this one renders; only the latest render is shown.
+    const index = this.index;
     let content: HTMLElement;
+    let truncated = false;
     try {
-      const rendered = await renderSlide(deck, this.index, media);
+      const rendered = await renderSlide(deck, index, media);
       content = rendered.element;
-      this.truncated = rendered.truncated;
-      this.markHidden(this.index, rendered.hidden);
+      truncated = rendered.truncated;
+      this.markHidden(index, rendered.hidden);
     } catch (error) {
-      content = element('div', { className: 'pptx-slide pptx-slide-error', text: `Slide ${this.index + 1} could not be displayed: ${(error as Error).message}` });
+      content = element('div', { className: 'pptx-slide pptx-slide-error', text: `Slide ${index + 1} could not be displayed: ${(error as Error).message}` });
       content.style.setProperty('width', `${deck.width / EMU_PER_PX}px`);
       content.style.setProperty('height', `${deck.height / EMU_PER_PX}px`);
-      this.truncated = false;
     }
     if (token !== this.renderToken) {
       return;
     }
+    this.truncated = truncated;
     content.id = 'pptx-current-slide';
-    content.setAttribute('aria-label', `Slide ${this.index + 1}`);
+    content.setAttribute('aria-label', `Slide ${index + 1}`);
     this.frame.replaceChildren(content);
     this.layoutFrame();
     this.updateNotice();

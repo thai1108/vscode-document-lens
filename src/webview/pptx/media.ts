@@ -27,6 +27,7 @@ export class MediaStore {
   private readonly pictures = new Map<string, Promise<Picture>>();
   private readonly urls: string[] = [];
   private used = 0;
+  private disposed = false;
 
   constructor(pkg: PptxPackage) {
     this.pkg = pkg;
@@ -56,13 +57,18 @@ export class MediaStore {
     if (!type) {
       return { unsupported: UNSUPPORTED_NAMES[kind] ?? 'Picture' };
     }
+    if (this.disposed) {
+      // A slide of the previous version of the file finished drawing after a reload.
+      return { unsupported: 'Picture' };
+    }
     const url = URL.createObjectURL(new Blob([bytes as Uint8Array<ArrayBuffer>], { type }));
     this.urls.push(url);
     return { url, ...imageSize(bytes, kind) };
   }
 
-  /** Revokes every URL handed out; the store must not be used afterwards. */
+  /** Revokes every URL handed out; pictures requested afterwards are not created. */
   dispose(): void {
+    this.disposed = true;
     for (const url of this.urls) {
       URL.revokeObjectURL(url);
     }

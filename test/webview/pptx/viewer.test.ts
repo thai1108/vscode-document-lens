@@ -83,6 +83,18 @@ describe('presentation viewer', () => {
     assert.deepEqual(host.state?.viewer, { slide: 2, fit: false }, 'zooming leaves fit mode');
   });
 
+  it('shows the slide chosen last when several are still rendering', async () => {
+    host = await open(sampleDeck());
+    host.key('ArrowRight');
+    host.key('ArrowRight');
+    host.key('ArrowRight');
+    await host.until(() => currentText().includes('Hidden slide'), 'last slide');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(counter(), '4 / 4');
+    assert.ok(currentText().includes('Hidden slide'));
+    assert.equal(host.$('#pptx-hidden-tag').hidden, false, 'an earlier slide finishing late does not clear the hidden tag');
+  });
+
   it('restores the saved slide and keeps it when the file changes on disk, releasing old pictures', async () => {
     host = await open(sampleDeck(), { state: { zoom: 1.5, viewer: { slide: 2, fit: false } } });
     assert.equal(counter(), '3 / 4');

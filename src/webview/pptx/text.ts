@@ -76,15 +76,13 @@ export function renderTextBody(txBody: Element, options: TextOptions): HTMLEleme
   if (!body.wrap) {
     container.classList.add('pptx-nowrap');
   }
-  const left = box.x + body.insets.l;
-  const top = box.y + body.insets.t;
-  let width = Math.max(0, box.w - body.insets.l - body.insets.r);
-  let height = Math.max(0, box.h - body.insets.t - body.insets.b);
+  const innerWidth = Math.max(0, box.w - body.insets.l - body.insets.r);
+  const innerHeight = Math.max(0, box.h - body.insets.t - body.insets.b);
   const transforms: string[] = [];
   const sideways = body.vert === 'vert' || body.vert === 'vert270' || body.vert === 'wordArtVertRtl';
+  // Sideways text is laid out in the box turned by 90°, centered on the real box, then rotated into place.
+  const [width, height] = sideways ? [innerHeight, innerWidth] : [innerWidth, innerHeight];
   if (sideways) {
-    // Lay the text out in the rotated box, then turn it into place.
-    [width, height] = [height, width];
     transforms.push(`rotate(${body.vert === 'vert270' ? -90 : 90}deg)`);
   } else if (body.vert === 'eaVert' || body.vert === 'mongolianVert' || body.vert === 'wordArtVert') {
     container.classList.add(body.vert === 'wordArtVert' ? 'pptx-vertical-upright' : 'pptx-vertical');
@@ -98,9 +96,7 @@ export function renderTextBody(txBody: Element, options: TextOptions): HTMLEleme
   if (body.upright && options.shapeRotation) {
     transforms.push(`rotate(${-options.shapeRotation}deg)`);
   }
-  const outerWidth = box.w - body.insets.l - body.insets.r;
-  const outerHeight = box.h - body.insets.t - body.insets.b;
-  setBox(container, left + (Math.max(0, outerWidth) - width) / 2, top + (Math.max(0, outerHeight) - height) / 2, width, height);
+  setBox(container, box.x + body.insets.l + (innerWidth - width) / 2, box.y + body.insets.t + (innerHeight - height) / 2, width, height);
   if (transforms.length > 0) {
     container.style.setProperty('transform', transforms.join(' '));
   }
@@ -108,7 +104,6 @@ export function renderTextBody(txBody: Element, options: TextOptions): HTMLEleme
   let flow: HTMLElement = container;
   if (body.columns > 1) {
     flow = document.createElement('div');
-    flow.className = 'pptx-columns';
     flow.style.setProperty('column-count', String(body.columns));
     flow.style.setProperty('column-gap', px(body.columnGap));
     container.append(flow);

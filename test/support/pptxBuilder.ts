@@ -90,6 +90,8 @@ export interface ShapeOptions {
   readonly textBox?: boolean;
   /** cNvPr children, e.g. a shape-level a:hlinkClick. */
   readonly nvExtra?: string;
+  /** Hidden in PowerPoint's selection pane (cNvPr hidden="1"). */
+  readonly hidden?: boolean;
 }
 
 export function xfrm(values: readonly [number, number, number, number], extra: { rot?: number; flipH?: boolean; flipV?: boolean } = {}, element = 'a:xfrm'): string {
@@ -115,7 +117,7 @@ export function shape(options: ShapeOptions): string {
       ? `<p:txBody>${options.bodyPr ?? '<a:bodyPr/>'}${options.lstStyle ?? '<a:lstStyle/>'}${options.paragraphs}</p:txBody>`
       : '';
   return (
-    `<p:sp><p:nvSpPr><p:cNvPr id="${options.id}" name="${escapeXml(options.name)}">${options.nvExtra ?? ''}</p:cNvPr>` +
+    `<p:sp><p:nvSpPr><p:cNvPr id="${options.id}" name="${escapeXml(options.name)}"${options.hidden ? ' hidden="1"' : ''}>${options.nvExtra ?? ''}</p:cNvPr>` +
     `<p:cNvSpPr${options.textBox ? ' txBox="1"' : ''}>${locks}</p:cNvSpPr><p:nvPr>${ph}</p:nvPr></p:nvSpPr>` +
     `<p:spPr>${properties}</p:spPr>${options.style ?? ''}${text}</p:sp>`
   );

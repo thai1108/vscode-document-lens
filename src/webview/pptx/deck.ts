@@ -4,7 +4,7 @@ import { DEFAULT_COLOR_MAP } from './color.ts';
 import { PPTX_LIMITS } from './limits.ts';
 import { firstOfType, PptxPackage, type Relationships } from './package.ts';
 import { DEFAULT_THEME, parseTheme, type Theme } from './theme.ts';
-import { attr, bool, child, find, kids, num } from './xml.ts';
+import { attr, bool, child, find, kids, num, relAttr } from './xml.ts';
 
 export interface Placeholder {
   readonly element: Element;
@@ -73,7 +73,7 @@ export class Deck {
     this.firstSlideNumber = num(presentation, 'firstSlideNum') ?? 1;
     const parts: string[] = [];
     for (const slideId of kids(child(presentation, 'sldIdLst'))) {
-      const rel = rels.get(attrRelId(slideId) ?? '');
+      const rel = rels.get(relAttr(slideId, 'id') ?? '');
       if (rel && !rel.external && pkg.has(rel.target)) {
         parts.push(rel.target);
       }
@@ -193,10 +193,6 @@ export class Deck {
 
 function clampSide(value: number): number {
   return Math.max(MIN_SLIDE_SIDE, Math.min(MAX_SLIDE_SIDE, value));
-}
-
-function attrRelId(element: Element): string | undefined {
-  return element.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships', 'id') || element.getAttribute('r:id') || undefined;
 }
 
 function colorMapOf(element: Element | undefined): Record<string, string> | undefined {

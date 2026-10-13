@@ -24,7 +24,7 @@ import { renderTable } from './table.ts';
 import { hasText, hyperlink, readBodyProperties, renderTextBody, setBox } from './text.ts';
 import { FILL_ELEMENTS, fontRefDefaults, TextStyleResolver, type TextLayers } from './textStyle.ts';
 import { EMU_PER_PX, mapIntoGroup, readGroupXfrm, readXfrm, type GroupXfrm, type Xfrm } from './units.ts';
-import { attr, child, find, kids, oneOf, relAttr } from './xml.ts';
+import { attr, bool, child, find, kids, oneOf, relAttr } from './xml.ts';
 
 /** Whose shape tree is drawn: only a slide's own placeholders are drawn (and inherit). */
 export type Scope = 'slide' | 'layout' | 'master' | 'drawing';
@@ -53,7 +53,7 @@ export async function renderShapeTree(tree: Element, container: Container, conte
       context.budget.truncated = true;
       return;
     }
-    if (!DRAWN.has(member.localName)) {
+    if (!DRAWN.has(member.localName) || bool(nonVisualProperties(member), 'hidden')) {
       continue;
     }
     if (container.scope !== 'slide' && container.scope !== 'drawing' && placeholderOf(member)) {
@@ -121,12 +121,17 @@ function frameOf(chain: readonly Element[]): Xfrm | undefined {
   return undefined;
 }
 
-/** The positioned box of a shape: an <a> when the shape itself is a hyperlink, labelled with the shape's name. */
-function shapeBox(member: Element, frame: Xfrm, context: RenderContext): HTMLElement {
-  const properties = child(
+/** p:cNvPr of a shape: its name, description, hidden flag and shape-level hyperlink. */
+function nonVisualProperties(member: Element): Element | undefined {
+  return child(
     kids(member).find((node) => node.localName.startsWith('nv') && node.localName.endsWith('Pr')),
     'cNvPr',
   );
+}
+
+/** The positioned box of a shape: an <a> when the shape itself is a hyperlink, labelled with the shape's name. */
+function shapeBox(member: Element, frame: Xfrm, context: RenderContext): HTMLElement {
+  const properties = nonVisualProperties(member);
   const element = hyperlink(child(properties, 'hlinkClick'), context) ?? document.createElement('div');
   element.classList.add('pptx-shape');
   const name = attr(properties, 'name');
@@ -371,14 +376,13 @@ async function renderGroup(group: Element, container: Container, context: Render
   const box = shapeBox(group, frame, context);
   box.classList.add('pptx-group');
   const paint = await readFill(oneOf(properties, FILL_ELEMENTS), context.colors, context);
-  const groupXfrm: GroupXfrm = { ...own, x: 0, y: 0, w: frame.w, h: frame.h };
-  await renderShapeTree(group, {
-    element: box,
-    scope: container.scope,
-    depth: container.depth + 1,
-    place: (member) => mirror(mapIntoGroup(member, { ...groupXfrm, chX: own.chX, chY: own.chY }), frame),
-    groupFill: paint ?? container.groupFill,
-  }, context);
+  // Members map from the group's child space onto the group's box as drawn (possibly scaled by enclosing groups).
+  const space: GroupXfrm = { ...own, w: frame.w, h: frame.h };
+  await renderShapeTree(
+    group,
+    { element: box, scope: container.scope, depth: container.depth + 1, place: (member) => mirror(mapIntoGroup(member, space), frame), groupFill: paint ?? container.groupFill },
+    context,
+  );
   return box;
 }
 
@@ -409,7 +413,6 @@ async function renderGraphicFrame(frameElement: Element, container: Container, c
   if (uri === GRAPHIC_TABLE) {
     const table = child(data, 'tbl');
     if (table) {
-      box.classList.add('pptx-table-frame');
       box.append(await renderTable(table, context));
       return box;
     }
