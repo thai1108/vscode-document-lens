@@ -130,6 +130,9 @@
     "package": "pnpm check && vsce package --no-dependencies"
   },
   "packageManager": "pnpm@10.15.1",
+  "dependencies": {
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+  },
   "devDependencies": {
     "@eslint/js": "10.0.1",
     "@playwright/test": "1.63.0",
