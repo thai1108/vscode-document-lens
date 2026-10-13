@@ -2,4 +2,4 @@
 // globalThis.pdfjsLib, which pdf.mjs sets when it is evaluated, so the core must be imported first.
 export { AnnotationEditorType, AnnotationMode, getDocument, PDFWorker, VerbosityLevel } from 'pdfjs-dist';
 export type { PDFDocumentLoadingTask, PDFDocumentProxy } from 'pdfjs-dist';
-export { EventBus, FindState, PDFFindController, PDFLinkService, PDFViewer } from 'pdfjs-dist/web/pdf_viewer.mjs';
+export { EventBus, FindState, PDFFindController, PDFLinkService, PDFViewer, ScrollMode } from 'pdfjs-dist/web/pdf_viewer.mjs';

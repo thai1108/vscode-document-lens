@@ -1,8 +1,12 @@
 // The PDF viewer in Chrome through the browser preview, on the synthetic samples of test/fixtures/pdf.ts. Set
 // E2E_FILES to also open your own .pdf files (they are only read locally).
 import { expect, test, type Page } from '@playwright/test';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import * as path from 'node:path';
-import { SAMPLE_PDF } from '../fixtures/pdf.ts';
+import { MAX_PDF_PAGES } from '../../src/limits.ts';
+import { HOSTILE_PDF, SAMPLE_PDF } from '../fixtures/pdf.ts';
+import { textPdf } from '../support/pdfWriter.ts';
 import { expectShellLoaded, servePreview, watchProblems, writeSample } from './preview-server.ts';
 
 test.use({ deviceScaleFactor: 2 });
@@ -362,9 +366,94 @@ test('a 600-page document only renders the pages near the view', async ({ page }
   });
 });
 
+test('more than 10,000 pages: one page at a time, turned by the wheel and keys at its edges', async ({ page }) => {
+  const pages = 10_001;
+  const file = path.join(mkdtempSync(path.join(tmpdir(), 'document-lens-pages-')), `pages-${pages}.pdf`);
+  writeFileSync(file, textPdf(Array.from({ length: pages }, (_, i) => [`Single page ${i + 1}`])));
+  const scroller = page.locator('#pdf-scroller');
+  const position = () =>
+    scroller.evaluate((element) => {
+      // Within the 12px gutter around the page.
+      if (element.scrollTop <= 13) {
+        return 'top';
+      }
+      return element.scrollTop + element.clientHeight >= element.scrollHeight - 13 ? 'bottom' : 'middle';
+    });
+  /** Repeats `action` (a key or wheel step, as a reader would) until the page number field shows `expected`. */
+  const repeatUntilPage = (action: () => Promise<void>, expected: number) =>
+    expect
+      .poll(
+        async () => {
+          await action();
+          return pageNumber(page).inputValue();
+        },
+        { intervals: [300], timeout: 10_000 },
+      )
+      .toBe(String(expected));
+
+  await withPdf(page, file, async () => {
+    await expect(page.locator('#pdf-page-count')).toHaveText(`of ${pages}`);
+    await expectRendered(page, 1);
+    // pdf.js keeps only the current page in the document in this mode.
+    await expect(page.locator('.pdfViewer .page')).toHaveCount(1);
+    await scroller.focus();
+
+    // PageDown first scrolls to the end of the page, then turns to the top of the next one.
+    await repeatUntilPage(() => page.keyboard.press('PageDown'), 2);
+    await expectRendered(page, 2);
+    expect(await position()).toBe('top');
+    await repeatUntilPage(() => page.keyboard.press('ArrowDown'), 3);
+    // Going back lands at the end of the previous page.
+    await repeatUntilPage(() => page.keyboard.press('PageUp'), 2);
+    expect(await position()).toBe('bottom');
+    await repeatUntilPage(() => page.keyboard.press('ArrowUp'), 1);
+
+    const box = await scroller.boundingBox();
+    await page.mouse.move((box?.x ?? 0) + 200, (box?.y ?? 0) + 200);
+    await repeatUntilPage(() => page.mouse.wheel(0, 400), 2);
+    await repeatUntilPage(() => page.mouse.wheel(0, -400), 1);
+
+    await goToPage(page, pages);
+    await expect(pageView(page, pages).locator('.textLayer')).toContainText(`Single page ${pages}`);
+  });
+});
+
+test('hostile link targets never reach the host, navigate, run script or load anything', async ({ page }) => {
+  const requests: string[] = [];
+  const dialogs: string[] = [];
+  page.on('request', (request) => requests.push(request.url()));
+  page.on('dialog', (dialog) => {
+    dialogs.push(dialog.message());
+    void dialog.dismiss();
+  });
+  await withPdf(page, 'hostile.pdf', async () => {
+    await expectRendered(page, 1);
+    const url = page.url();
+    const box = await pageView(page, 1).boundingBox();
+    const [, height = 0] = HOSTILE_PDF.pageSize;
+    expect(box).not.toBeNull();
+    // Click the middle of every link area (the https one last), whatever pdf.js made of it.
+    for (let index = 0; index <= HOSTILE_PDF.labels.length; index++) {
+      const [x1 = 0, y1 = 0, x2 = 0, y2 = 0] = HOSTILE_PDF.linkRect(index);
+      await page.mouse.click((box?.x ?? 0) + (((x1 + x2) / 2) * 4) / 3, (box?.y ?? 0) + ((height - (y1 + y2) / 2) * 4) / 3);
+    }
+    await expect.poll(() => page.evaluate(() => (window as unknown as { previewLinks: string[] }).previewLinks)).toEqual([HOSTILE_PDF.safeUrl]);
+
+    const hrefs = await page.locator('.annotationLayer a[href]').evaluateAll((links) => links.map((link) => link.getAttribute('href') ?? ''));
+    expect(hrefs.filter((href) => /^\s*(javascript|file|data|vbscript):/i.test(href))).toEqual([]);
+    expect(page.url()).toBe(url);
+    expect(dialogs).toEqual([]);
+    const origin = new URL(url).origin;
+    const ownFiles = /^\/(index\.html|data\.js|mock\.js|favicon\.ico|dist\/webview-pdf\.(js|css))$/;
+    expect(requests.filter((request) => !/^(data|blob):/.test(request) && !(request.startsWith(origin) && ownFiles.test(request.slice(origin.length))))).toEqual([]);
+  });
+});
+
 const UNREADABLE = [
   ['encrypted.pdf', 'Could not display encrypted.pdf: This .pdf file is password-protected; Document Lens cannot open encrypted files'],
   ['broken.pdf', 'Could not display broken.pdf: Not a valid .pdf file: Invalid PDF structure.'],
+  // A few hundred bytes whose page tree claims 100,000,000 pages: refused before any page is laid out.
+  ['huge-count.pdf', `Could not display huge-count.pdf: This .pdf file has too many pages (${SAMPLE_PDF.claimedPageCount}; limit ${MAX_PDF_PAGES})`],
 ] as const;
 
 for (const [fileName, message] of UNREADABLE) {

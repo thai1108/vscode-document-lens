@@ -4,7 +4,7 @@
 import type { LoadedDocument, Viewer, ViewerContext } from '../shell/app.ts';
 import { element } from '../shell/dom.ts';
 import { embeddedDataFactory, type EmbeddedFiles } from './assets.ts';
-import { loadErrorMessage } from './errors.ts';
+import { loadErrorMessage, pageCountError } from './errors.ts';
 import { fitWidthZoom, parseViewState, type PdfViewState } from './navigation.ts';
 import { flattenOutline, renderOutline, type OutlineNode } from './outline.ts';
 import {
@@ -17,6 +17,7 @@ import {
   PDFLinkService,
   PDFViewer,
   PDFWorker,
+  ScrollMode,
   VerbosityLevel,
   type PDFDocumentLoadingTask,
   type PDFDocumentProxy,
@@ -35,6 +36,8 @@ const PAGE_GUTTER = 12;
 /** Images above this many pixels are left out instead of decoded: a hostile file can declare any size. */
 const MAX_IMAGE_PIXELS = 2 ** 26;
 const SAVE_DELAY_MS = 250;
+/** Wheel events closer together than this are one gesture, which turns at most one page in single-page mode. */
+const WHEEL_GESTURE_GAP_MS = 200;
 /**
  * pdf.js shows a note's icon by appending "annotation-<name>.svg" (a name taken from the file) to this prefix. After
  * the `#` that is only a URL fragment, so every note gets this icon and nothing is ever requested.
@@ -77,8 +80,9 @@ export function createPdfViewer(options: PdfViewerOptions): Viewer {
 async function openDocument(task: PDFDocumentLoadingTask): Promise<PDFDocumentProxy> {
   try {
     const pdf = await task.promise;
-    if (pdf.numPages < 1) {
-      throw new Error('This .pdf file has no pages');
+    const pageCountProblem = pageCountError(pdf.numPages);
+    if (pageCountProblem) {
+      throw new Error(pageCountProblem);
     }
     // PDFViewer only logs a first page that cannot be read; checking it here turns that into the error banner.
     await pdf.getPage(1);
@@ -120,6 +124,8 @@ class PdfView {
   #hasOutline = false;
   #findNotFound = false;
   #saveTimer: ReturnType<typeof setTimeout> | undefined;
+  #lastWheel = Number.NEGATIVE_INFINITY;
+  #turnedInGesture = false;
 
   constructor(context: ViewerContext) {
     this.#context = context;
@@ -177,6 +183,9 @@ class PdfView {
     for (const type of ['wheel', 'pointerdown', 'keydown', 'touchstart']) {
       this.#scroller.addEventListener(type, () => (this.#moved = true), { passive: true });
     }
+    // Above 10,000 pages pdf.js shows one page at a time (ScrollMode.PAGE); scrolling on at its edge turns the page.
+    this.#scroller.addEventListener('wheel', (event) => this.#onWheel(event), { passive: false });
+    this.#scroller.addEventListener('keydown', (event) => this.#onKey(event));
     // A hidden webview (a background tab) has no layout; zoom and scroll wait until it is shown again.
     new ResizeObserver(() => this.#applyPendingView()).observe(this.#scroller);
     window.addEventListener('focus', () => this.#focusIfIdle());
@@ -258,6 +267,46 @@ class PdfView {
         this.#context.setZoom(fit);
       }
     }
+  }
+
+  #onWheel(event: WheelEvent): void {
+    if (this.#viewer.scrollMode !== ScrollMode.PAGE || event.ctrlKey || event.metaKey || event.deltaY === 0) {
+      return;
+    }
+    if (event.timeStamp - this.#lastWheel > WHEEL_GESTURE_GAP_MS) {
+      this.#turnedInGesture = false;
+    }
+    this.#lastWheel = event.timeStamp;
+    // One flick of a trackpad sends dozens of events; it may turn one page, not run through the document.
+    if (!this.#turnedInGesture && this.#turnPageAtEdge(event.deltaY > 0)) {
+      this.#turnedInGesture = true;
+      event.preventDefault();
+    }
+  }
+
+  #onKey(event: KeyboardEvent): void {
+    if (this.#viewer.scrollMode !== ScrollMode.PAGE || event.altKey || event.ctrlKey || event.metaKey) {
+      return;
+    }
+    const forward = event.key === 'PageDown' || event.key === 'ArrowDown';
+    if ((forward || event.key === 'PageUp' || event.key === 'ArrowUp') && this.#turnPageAtEdge(forward)) {
+      event.preventDefault();
+    }
+  }
+
+  /** In single-page mode, turns to the next (or previous) page when the view is already at the page's end (or start). */
+  #turnPageAtEdge(forward: boolean): boolean {
+    const { scrollTop, scrollHeight, clientHeight } = this.#scroller;
+    // The page's own edge is in view once only the gutter around it is left to scroll.
+    const atEdge = forward ? scrollTop + clientHeight >= scrollHeight - PAGE_GUTTER - 1 : scrollTop <= PAGE_GUTTER + 1;
+    if (!atEdge || !(forward ? this.#viewer.nextPage() : this.#viewer.previousPage())) {
+      return false;
+    }
+    if (!forward) {
+      // Going back lands at the end of the previous page, as continuous scrolling would.
+      this.#scroller.scrollTop = this.#scroller.scrollHeight;
+    }
+    return true;
   }
 
   #track(location: ViewArea | undefined): void {

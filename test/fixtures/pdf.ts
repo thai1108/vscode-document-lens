@@ -26,6 +26,32 @@ export const SAMPLE_PDF = {
   /** The CCITT fax image: a square on page 2, left half white and right half black (PDF coordinates). */
   image: { page: 2, x: 72, y: 400, size: 120 },
   longPageCount: 600,
+  /** What huge-count.pdf's page tree claims, in a few hundred bytes. */
+  claimedPageCount: 100_000_000,
+};
+
+/** Link actions in hostile.pdf that must never open anything or load anything, top to bottom. */
+const HOSTILE_ACTIONS: [label: string, action: string][] = [
+  ['javascript: URI', `<< /S /URI /URI ${pdfString('javascript:alert(1)')} >>`],
+  ['file: URI', `<< /S /URI /URI ${pdfString('file:///etc/passwd')} >>`],
+  ['data: URI', `<< /S /URI /URI ${pdfString('data:text/html,<script>alert(1)</script>')} >>`],
+  ['Launch', '<< /S /Launch /F (/bin/sh) /Win << /F (cmd.exe) >> >>'],
+  ['relative GoToR', '<< /S /GoToR /F (other.pdf) /D [0 /Fit] >>'],
+  ['SubmitForm', `<< /S /SubmitForm /F << /FS /URL /F ${pdfString('https://example.com/submit')} >> >>`],
+  ['JavaScript', `<< /S /JavaScript /JS ${pdfString('app.alert(1);')} >>`],
+  // pdf.js recovers the URL of a lone app.launchURL() call even without scripting, then checks it like a URI action.
+  ['JavaScript opening a file: URL', `<< /S /JavaScript /JS ${pdfString('app.launchURL("file:///etc/passwd", true);')} >>`],
+  ['mailto: URI', `<< /S /URI /URI ${pdfString('mailto:someone@example.com')} >>`],
+  ['URL with credentials', `<< /S /URI /URI ${pdfString('https://user:password@example.com/')} >>`],
+];
+
+export const HOSTILE_PDF = {
+  labels: HOSTILE_ACTIONS.map(([label]) => label),
+  /** The last link, an ordinary https one, proves that clicks on links do reach the host. */
+  safeUrl: 'https://example.com/safe',
+  pageSize: [612, 792],
+  /** [x1, y1, x2, y2] of the index-th link (the safe one comes last), in PDF coordinates. */
+  linkRect: (index: number) => [72, 720 - index * 44, 360, 748 - index * 44],
 };
 
 function text(font: string, size: number, x: number, y: number, string: string): string {
@@ -131,6 +157,37 @@ function samplePdf(): Buffer {
   return pdf.write();
 }
 
+/** One page of links whose targets are dangerous, plus scripts that would run on open if scripting were enabled. */
+function hostilePdf(): Buffer {
+  const pdf = new PdfObjects();
+  const catalog = pdf.add();
+  const pages = pdf.add();
+  const page = pdf.add();
+  const helvetica = pdf.add('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>');
+  const targets: [string, string][] = [...HOSTILE_ACTIONS, ['https link', `<< /S /URI /URI ${pdfString(HOSTILE_PDF.safeUrl)} >>`]];
+  const annotations = targets.map(([, action], index) =>
+    pdf.add(link(HOSTILE_PDF.linkRect(index), `/A ${action} /AA << /E << /S /JavaScript /JS ${pdfString('app.alert(2)')} >> >>`)),
+  );
+  const labels = targets.map(([label], index) => text('F1', 12, 80, (HOSTILE_PDF.linkRect(index)[1] ?? 0) + 10, pdfString(label))).join('\n');
+  pdf.set(
+    page,
+    `<< /Type /Page /Parent ${pages} 0 R /MediaBox [0 0 ${HOSTILE_PDF.pageSize.join(' ')}] /Resources << /Font << /F1 ${helvetica} 0 R >> >> /Contents ${pdf.add(pdfStream('', labels))} 0 R /Annots [${annotations.map((id) => `${id} 0 R`).join(' ')}] >>`,
+  );
+  pdf.set(pages, `<< /Type /Pages /Kids [${page} 0 R] /Count 1 >>`);
+  pdf.set(catalog, `<< /Type /Catalog /Pages ${pages} 0 R /OpenAction << /S /JavaScript /JS ${pdfString('app.alert(1)')} >> >>`);
+  return pdf.write();
+}
+
+/** A page tree whose /Count claims far more pages than the file has; pdf.js reports the claimed count. */
+function hugeCountPdf(): Buffer {
+  return writePdf([
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    `<< /Type /Pages /Count ${SAMPLE_PDF.claimedPageCount} /Kids [3 0 R 4 0 R] >>`,
+    `<< /Type /Pages /Count ${SAMPLE_PDF.claimedPageCount - 1} /Kids [] >>`,
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>',
+  ]);
+}
+
 /** Standard security handler with a user password: the stored check value matches no password, so none opens it. */
 function encryptedPdf(): Buffer {
   const objects = [
@@ -150,6 +207,8 @@ export const samples: Sample[] = [
     build: () => textPdf(Array.from({ length: SAMPLE_PDF.longPageCount }, (_, i) => [`Long document page ${i + 1}`])),
   },
   { fileName: 'encrypted.pdf', build: encryptedPdf },
+  { fileName: 'hostile.pdf', build: hostilePdf },
+  { fileName: 'huge-count.pdf', build: hugeCountPdf },
   // Passes the host's header check but has no PDF structure behind it.
   { fileName: 'broken.pdf', build: () => Buffer.from('%PDF-1.7\nThis is not a PDF body.\n', 'latin1') },
 ];
