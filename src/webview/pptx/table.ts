@@ -3,7 +3,7 @@
 import { toCss, type Rgba } from './color.ts';
 import { PPTX_LIMITS } from './limits.ts';
 import { readFill, readLine, type LineStyle, type Paint } from './paint.ts';
-import type { RenderContext } from './renderContext.ts';
+import { spend, type RenderContext } from './renderContext.ts';
 import { px, readBodyProperties, renderParagraphs } from './text.ts';
 import { cellTextDefaults, TextStyleResolver } from './textStyle.ts';
 import { EMU_PER_PX } from './units.ts';
@@ -96,7 +96,7 @@ export async function renderTable(tbl: Element, context: RenderContext): Promise
       if (bool(tc, 'hMerge') || bool(tc, 'vMerge')) {
         continue;
       }
-      if (++cells > PPTX_LIMITS.maxTableCells) {
+      if (++cells > PPTX_LIMITS.maxTableCells || !spend(context.budget, 1)) {
         context.budget.truncated = true;
         body.append(tr);
         return table;

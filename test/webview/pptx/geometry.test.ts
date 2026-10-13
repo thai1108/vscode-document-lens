@@ -149,9 +149,17 @@ describe('custom geometry', () => {
     const commands = '<a:lnTo><a:pt x="1" y="1"/></a:lnTo>'.repeat(50);
     const guides = Array.from({ length: 50 }, (_, i) => `<a:gd name="g${i}" fmla="val ${i}"/>`).join('');
     const def = customGeometry(xml(`<a:custGeom ${A_NS}><a:gdLst>${guides}</a:gdLst><a:pathLst><a:path w="1" h="1"><a:moveTo><a:pt x="0" y="0"/></a:moveTo>${commands}</a:path></a:pathLst></a:custGeom>`));
-    assert.equal(def.paths[0]?.commands.length, 10);
+    assert.equal(def.paths[0]?.commands.length, 9, 'the path itself counts as one command');
     assert.equal(def.guides.length, 5);
     assert.equal(formulasOf(xml(`<a:gdLst ${A_NS}>${guides}</a:gdLst>`)).length, 5);
+    const empty = customGeometry(xml(`<a:custGeom ${A_NS}><a:pathLst>${'<a:path/>'.repeat(50)}</a:pathLst></a:custGeom>`));
+    assert.equal(empty.paths.length, 10, 'empty paths cannot multiply without bound');
+    assert.equal(buildGeometry(empty, 952500, 952500).paths[0]?.segments, 1);
+  });
+
+  it('reads a custom geometry element once, however many shapes inherit it', () => {
+    const element = xml(house);
+    assert.equal(customGeometry(element), customGeometry(element));
   });
 });
 

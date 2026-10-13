@@ -2,13 +2,14 @@
 // its geometry (fill, outline, picture) and an HTML text layer. Placeholders on a slide inherit position, geometry,
 // outline and text properties from their layout and master placeholders.
 import { matchPlaceholder, placeholderKind, placeholderOf, type SlideInfo } from './deck.ts';
-import { buildGeometry, customGeometry, formulasOf, presetGeometry, type BuiltGeometry, type Rect } from './geometry.ts';
+import { buildGeometry, customGeometry, formulasOf, presetGeometry, type BuiltGeometry, type FillMode, type Rect } from './geometry.ts';
 import { PPTX_LIMITS } from './limits.ts';
 import {
   applyLine,
   applyPaint,
   modifyPaint,
   NO_PAINT,
+  paintTarget,
   readBlipFill,
   readFill,
   readLine,
@@ -18,8 +19,9 @@ import {
   svg,
   type LineSource,
   type Paint,
+  type PaintTarget,
 } from './paint.ts';
-import { relationshipTarget, type RenderContext } from './renderContext.ts';
+import { relationshipTarget, spend, type RenderContext } from './renderContext.ts';
 import { renderTable } from './table.ts';
 import { hasText, hyperlink, readBodyProperties, renderTextBody, setBox } from './text.ts';
 import { FILL_ELEMENTS, fontRefDefaults, TextStyleResolver, type TextLayers } from './textStyle.ts';
@@ -58,6 +60,9 @@ export async function renderShapeTree(tree: Element, container: Container, conte
     }
     if (container.scope !== 'slide' && container.scope !== 'drawing' && placeholderOf(member)) {
       continue;
+    }
+    if (!spend(context.budget, 1)) {
+      return;
     }
     context.budget.shapes -= 1;
     try {
@@ -208,7 +213,7 @@ function shadowOf(chain: readonly Element[], context: RenderContext): string | u
 }
 
 /** An SVG canvas over the shape box, with geometry flips applied to its content group. */
-function geometryCanvas(frame: Xfrm): { root: SVGSVGElement; defs: SVGDefsElement; group: SVGGElement; w: number; h: number } {
+function geometryCanvas(frame: Xfrm, context: RenderContext): { root: SVGSVGElement; group: SVGGElement; target: PaintTarget; w: number; h: number } {
   const w = frame.w / EMU_PER_PX;
   const h = frame.h / EMU_PER_PX;
   const root = svg('svg', { class: 'pptx-geometry', width: round(Math.max(w, 1)), height: round(Math.max(h, 1)) });
@@ -218,7 +223,12 @@ function geometryCanvas(frame: Xfrm): { root: SVGSVGElement; defs: SVGDefsElemen
     group.setAttribute('transform', `matrix(${frame.flipH ? -1 : 1} 0 0 ${frame.flipV ? -1 : 1} ${frame.flipH ? round(w) : 0} ${frame.flipV ? round(h) : 0})`);
   }
   root.append(defs, group);
-  return { root, defs, group, w, h };
+  return { root, group, target: paintTarget(defs, { w, h }, context.budget), w, h };
+}
+
+/** Takes the geometry's path commands from the slide's element budget. */
+function spendOnGeometry(geometry: BuiltGeometry, context: RenderContext): boolean {
+  return spend(context.budget, geometry.paths.reduce((sum, path) => sum + path.segments, 0));
 }
 
 async function renderShape(shape: Element, container: Container, context: RenderContext): Promise<HTMLElement | undefined> {
@@ -235,16 +245,23 @@ async function renderShape(shape: Element, container: Container, context: Render
   const fill = connector ? NO_PAINT : await fillOf(chain, container, context);
   const line = await readLine(lineSources(chain, context), context);
   const visibleLine = line !== undefined && line.paint.kind !== 'none';
-  if (fill.kind !== 'none' || visibleLine) {
-    const canvas = geometryCanvas(frame);
+  if ((fill.kind !== 'none' || visibleLine) && spendOnGeometry(geometry, context)) {
+    const canvas = geometryCanvas(frame, context);
+    // One paint per fill mode, so every path of the shape shares one gradient or pattern definition.
+    const fills = new Map<FillMode, Paint>();
     for (const path of geometry.paths) {
       const element = svg('path', { d: path.d });
       if (path.fill === 'none') {
         element.setAttribute('fill', 'none');
       } else {
-        applyPaint(element, 'fill', modifyPaint(fill, path.fill), canvas.defs, canvas);
+        let paint = fills.get(path.fill);
+        if (!paint) {
+          paint = modifyPaint(fill, path.fill);
+          fills.set(path.fill, paint);
+        }
+        applyPaint(element, 'fill', paint, canvas.target);
       }
-      applyLine(element, path.stroke ? line : undefined, canvas.defs, canvas, !path.d.includes('Z'));
+      applyLine(element, path.stroke ? line : undefined, canvas.target, !path.d.includes('Z'));
       canvas.group.append(element);
     }
     const shadow = shadowOf(chain, context);
@@ -315,11 +332,13 @@ async function renderPicture(picture: Element, container: Container, context: Re
   const paint = blipFill ? await readBlipFill(blipFill, context) : NO_PAINT;
   const geometry = geometryOf(chain, frame, false);
   const line = await readLine(lineSources(chain, context), context);
-  const canvas = geometryCanvas(frame);
+  const canvas = geometryCanvas(frame, context);
+  // Pictures draw their outline as separate paths, so the geometry is paid for twice.
+  const drawn = spendOnGeometry(geometry, context) && spendOnGeometry(geometry, context);
   if (paint.kind === 'image' && 'url' in paint.picture) {
-    for (const path of geometry.paths.filter((item) => item.fill !== 'none')) {
+    for (const path of drawn ? geometry.paths.filter((item) => item.fill !== 'none') : []) {
       const element = svg('path', { d: path.d, stroke: 'none' });
-      applyPaint(element, 'fill', paint, canvas.defs, canvas);
+      applyPaint(element, 'fill', paint, canvas.target);
       canvas.group.append(element);
     }
     if (paint.grayscale) {
@@ -328,9 +347,9 @@ async function renderPicture(picture: Element, container: Container, context: Re
   } else {
     box.append(placeholderLabel(paint.kind === 'image' && 'unsupported' in paint.picture ? paint.picture.unsupported : 'Picture'));
   }
-  for (const path of geometry.paths.filter((item) => item.stroke)) {
+  for (const path of drawn ? geometry.paths.filter((item) => item.stroke) : []) {
     const element = svg('path', { d: path.d, fill: 'none' });
-    applyLine(element, line, canvas.defs, canvas, !path.d.includes('Z'));
+    applyLine(element, line, canvas.target, !path.d.includes('Z'));
     canvas.group.append(element);
   }
   const shadow = shadowOf(chain, context);
@@ -422,7 +441,12 @@ async function renderGraphicFrame(frameElement: Element, container: Container, c
     return box;
   }
   if (uri.endsWith('/diagram')) {
-    const drawing = await smartArtDrawing(data, context);
+    // A SmartArt drawing never holds SmartArt of its own; following one could lead back to the same drawing forever.
+    const nestable = container.scope !== 'drawing' && container.depth < PPTX_LIMITS.maxGroupDepth;
+    if (!nestable) {
+      context.budget.truncated = true;
+    }
+    const drawing = nestable ? await smartArtDrawing(data, context) : undefined;
     if (drawing) {
       box.classList.add('pptx-group');
       const scale = { ...frame, x: 0, y: 0, chX: 0, chY: 0, chW: own.w, chH: own.h };
@@ -437,9 +461,9 @@ async function renderGraphicFrame(frameElement: Element, container: Container, c
     if (preview) {
       const blip = await readBlipFill(child(preview, 'blipFill') ?? preview, context);
       if (blip.kind === 'image' && 'url' in blip.picture) {
-        const canvas = geometryCanvas(frame);
+        const canvas = geometryCanvas(frame, context);
         const rect = svg('rect', { width: round(canvas.w), height: round(canvas.h) });
-        applyPaint(rect, 'fill', blip, canvas.defs, canvas);
+        applyPaint(rect, 'fill', blip, canvas.target);
         canvas.group.append(rect);
         box.append(canvas.root);
         return box;
@@ -487,39 +511,54 @@ const CHART_NAMES: Readonly<Record<string, string>> = {
   ofPieChart: 'Pie chart',
 };
 
+const CHART_KIND = new RegExp(`<(?:[\\w.-]+:)?(${Object.keys(CHART_NAMES).join('|')})[\\s/>]`);
+
 async function chartLabel(data: Element | undefined, context: RenderContext): Promise<string> {
   const target = relationshipTarget(context, relAttr(child(data, 'chart'), 'id'));
   if (!target || target.external || !context.deck.pkg.has(target.target)) {
     return 'Chart';
   }
-  try {
-    const plot = find(await context.deck.pkg.xml(target.target), 'chart', 'plotArea');
-    const kind = kids(plot)
-      .map((node) => CHART_NAMES[node.localName])
-      .find((name) => name !== undefined);
-    return kind ?? 'Chart';
-  } catch {
-    return 'Chart';
-  }
+  // Only the chart's type is shown, so the part is scanned, not parsed.
+  const kind = await fromPart(context, 'chart', target.target, async () => CHART_KIND.exec(await context.deck.pkg.text(target.target))?.[1]);
+  return (kind && CHART_NAMES[kind]) ?? 'Chart';
 }
 
 /** The pre-drawn shapes PowerPoint stores for a SmartArt graphic (diagramDrawing part), when present. */
 async function smartArtDrawing(data: Element | undefined, context: RenderContext): Promise<{ tree: Element; part: string } | undefined> {
+  const pkg = context.deck.pkg;
   const dataModel = relationshipTarget(context, relAttr(child(data, 'relIds'), 'dm'));
-  if (!dataModel || dataModel.external || !context.deck.pkg.has(dataModel.target)) {
+  if (!dataModel || dataModel.external || !pkg.has(dataModel.target)) {
     return undefined;
   }
-  try {
-    const model = await context.deck.pkg.xml(dataModel.target);
-    const relId = kids(child(model, 'extLst'))
+  const relId = await fromPart(context, 'diagram-data', dataModel.target, async () =>
+    kids(child(await pkg.xml(dataModel.target), 'extLst'))
       .map((ext) => attr(child(ext, 'dataModelExt'), 'relId'))
-      .find((id) => id !== undefined);
-    const drawing = (relId && context.rels.get(relId)) || firstDrawing(context);
-    if (!drawing || drawing.external || !context.deck.pkg.has(drawing.target)) {
+      .find((id) => id !== undefined),
+  );
+  const drawing = (relId && context.rels.get(relId)) || firstDrawing(context);
+  if (!drawing || drawing.external || !pkg.has(drawing.target)) {
+    return undefined;
+  }
+  const tree = await fromPart(context, 'diagram-drawing', drawing.target, async () => child(await pkg.xml(drawing.target), 'spTree'));
+  return tree ? { tree, part: drawing.target } : undefined;
+}
+
+/**
+ * Something derived from a chart or SmartArt part, worked out once per presentation. The first slide that needs the
+ * part pays its size from its budget, and gets nothing when that would exceed it.
+ */
+async function fromPart<T>(context: RenderContext, kind: string, part: string, load: () => Promise<T>): Promise<T | undefined> {
+  const key = `${kind}:${part}`;
+  if (!context.deck.known(key)) {
+    const size = context.deck.pkg.size(part) ?? 0;
+    if (size > context.budget.partBytes) {
+      context.budget.truncated = true;
       return undefined;
     }
-    const tree = child(await context.deck.pkg.xml(drawing.target), 'spTree');
-    return tree ? { tree, part: drawing.target } : undefined;
+    context.budget.partBytes -= size;
+  }
+  try {
+    return await context.deck.once(key, load);
   } catch {
     return undefined;
   }

@@ -2,10 +2,9 @@
 // the slide hides them), then the slide's shapes.
 import { toCss, type ColorContext } from './color.ts';
 import type { Deck, PartInfo, SlideInfo } from './deck.ts';
-import { PPTX_LIMITS } from './limits.ts';
 import type { MediaStore } from './media.ts';
-import { applyPaint, readFill, styleFill, svg, type Paint } from './paint.ts';
-import type { RenderContext } from './renderContext.ts';
+import { applyPaint, paintTarget, readFill, styleFill, svg, type Paint } from './paint.ts';
+import { slideBudget, type RenderContext } from './renderContext.ts';
 import { renderShapeTree, type Scope } from './shapes.ts';
 import { setBox } from './text.ts';
 import { EMU_PER_PX } from './units.ts';
@@ -36,12 +35,17 @@ export async function renderSlide(deck: Deck, index: number, media: MediaStore):
     part: slide.part,
     rels: slide.rels,
     media,
-    budget: { shapes: PPTX_LIMITS.maxShapesPerSlide, runs: PPTX_LIMITS.maxRunsPerSlide, truncated: false },
+    budget: slideBudget(),
     slideNumber: deck.firstSlideNumber + index,
   };
   const forPart = (part: PartInfo): RenderContext => ({ ...base, part: part.part, rels: part.rels });
 
-  await renderBackground(element, slide, width, height, forPart);
+  try {
+    await renderBackground(element, slide, width, height, forPart);
+  } catch {
+    // A background picture that cannot be read leaves the slide on its default background, not blank.
+    base.budget.truncated = true;
+  }
   const layers: [PartInfo | undefined, Scope, boolean][] = [
     [slide.master, 'master', slide.showMasterShapes && slide.layout?.showMasterShapes !== false],
     [slide.layout, 'layout', slide.showMasterShapes],
@@ -75,7 +79,7 @@ async function renderBackground(element: HTMLElement, slide: SlideInfo, width: n
     const canvas = svg('svg', { class: 'pptx-background', width: round(width), height: round(height) });
     const defs = svg('defs');
     const rect = svg('rect', { width: round(width), height: round(height) });
-    applyPaint(rect, 'fill', paint, defs, { w: width, h: height });
+    applyPaint(rect, 'fill', paint, paintTarget(defs, { w: width, h: height }, context.budget));
     canvas.append(defs, rect);
     setBox(canvas, 0, 0, width, height);
     element.prepend(canvas);

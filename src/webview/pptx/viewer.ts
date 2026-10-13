@@ -16,7 +16,8 @@ interface SavedState {
 
 const STAGE_PADDING = 24;
 const THUMB_WIDTH = 168;
-const THUMB_MARGIN = '300px';
+const THUMB_DRAW_MARGIN = '300px';
+const THUMB_KEEP_MARGIN = '1500px';
 
 export function createPptxViewer(): Viewer {
   let ui: PresentationView | undefined;
@@ -56,7 +57,12 @@ class PresentationView {
   private renderToken = 0;
   private hidden: boolean[] = [];
   private truncated = false;
-  private observer: IntersectionObserver | undefined;
+  private observers: IntersectionObserver[] = [];
+  /** Bumped whenever a thumbnail is released, so a render that finishes afterwards is dropped. */
+  private thumbTokens: number[] = [];
+  private thumbDrawn: boolean[] = [];
+  /** Slides that hit a limit; their thumbnail is a note instead of a second copy of the slide. */
+  private readonly limited = new Set<number>();
   private thumbnails: HTMLElement[] = [];
 
   constructor(context: ViewerContext) {
@@ -228,7 +234,13 @@ class PresentationView {
   }
 
   private buildList(deck: Deck): void {
-    this.observer?.disconnect();
+    for (const observer of this.observers) {
+      observer.disconnect();
+    }
+    this.observers = [];
+    this.thumbTokens = deck.slideParts.map(() => 0);
+    this.thumbDrawn = deck.slideParts.map(() => false);
+    this.limited.clear();
     const ratio = deck.height / deck.width;
     this.thumbnails = deck.slideParts.map((_part, index) => {
       const thumb = element('button', { className: 'pptx-thumb', attributes: { 'data-index': String(index), 'aria-label': `Slide ${index + 1}` } });
@@ -242,16 +254,27 @@ class PresentationView {
     });
     this.list.replaceChildren(...this.thumbnails);
     if (typeof IntersectionObserver !== 'undefined') {
-      this.observer = new IntersectionObserver((entries) => {
+      // Thumbnails are drawn as they come near the visible part of the list and released when far from it, so a
+      // long deck only ever holds a screenful of slides or so.
+      const indexOf = (target: Element) => Number(target.getAttribute('data-index'));
+      const draw = new IntersectionObserver((entries) => {
         for (const entry of entries) {
           if (entry.isIntersecting) {
-            this.observer?.unobserve(entry.target);
-            void this.renderThumbnail(deck, Number(entry.target.getAttribute('data-index')));
+            void this.renderThumbnail(deck, indexOf(entry.target));
           }
         }
-      }, { root: this.list, rootMargin: THUMB_MARGIN });
+      }, { root: this.list, rootMargin: THUMB_DRAW_MARGIN });
+      const keep = new IntersectionObserver((entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) {
+            this.releaseThumbnail(indexOf(entry.target));
+          }
+        }
+      }, { root: this.list, rootMargin: THUMB_KEEP_MARGIN });
+      this.observers = [draw, keep];
       for (const thumb of this.thumbnails) {
-        this.observer.observe(thumb);
+        draw.observe(thumb);
+        keep.observe(thumb);
       }
     }
     if (deck.slideParts.length === 0) {
@@ -260,23 +283,44 @@ class PresentationView {
   }
 
   private async renderThumbnail(deck: Deck, index: number): Promise<void> {
-    const thumb = this.thumbnails[index];
+    const frame = this.thumbnails[index]?.querySelector<HTMLElement>('.pptx-thumb-frame');
     const media = this.media;
-    if (!thumb || !media || deck !== this.deck) {
+    if (!frame || !media || deck !== this.deck || this.thumbDrawn[index]) {
       return;
     }
-    const frame = thumb.querySelector<HTMLElement>('.pptx-thumb-frame');
+    this.thumbDrawn[index] = true;
+    const token = (this.thumbTokens[index] ?? 0) + 1;
+    this.thumbTokens[index] = token;
+    if (this.limited.has(index)) {
+      frame.replaceChildren(limitedNote());
+      return;
+    }
     try {
       const rendered = await renderSlide(deck, index, media);
-      if (deck !== this.deck || !frame) {
+      if (deck !== this.deck || token !== this.thumbTokens[index]) {
+        return;
+      }
+      this.markHidden(index, rendered.hidden);
+      if (rendered.truncated) {
+        // A slide that hit a limit is built again only for the main view, never kept as a thumbnail.
+        this.limited.add(index);
+        frame.replaceChildren(limitedNote());
         return;
       }
       rendered.element.style.setProperty('transform', `scale(${THUMB_WIDTH / (deck.width / EMU_PER_PX)})`);
       frame.replaceChildren(rendered.element);
-      this.markHidden(index, rendered.hidden);
     } catch {
-      frame?.replaceChildren(element('span', { className: 'pptx-thumb-error', text: '!' }));
+      frame.replaceChildren(element('span', { className: 'pptx-thumb-error', text: '!' }));
     }
+  }
+
+  private releaseThumbnail(index: number): void {
+    if (!this.thumbDrawn[index]) {
+      return;
+    }
+    this.thumbDrawn[index] = false;
+    this.thumbTokens[index] = (this.thumbTokens[index] ?? 0) + 1;
+    this.thumbnails[index]?.querySelector('.pptx-thumb-frame')?.replaceChildren();
   }
 
   private async scanHidden(deck: Deck): Promise<void> {
@@ -335,6 +379,9 @@ class PresentationView {
       const rendered = await renderSlide(deck, index, media);
       content = rendered.element;
       truncated = rendered.truncated;
+      if (truncated) {
+        this.limited.add(index);
+      }
       this.markHidden(index, rendered.hidden);
     } catch (error) {
       content = element('div', { className: 'pptx-slide pptx-slide-error', text: `Slide ${index + 1} could not be displayed: ${(error as Error).message}` });
@@ -362,4 +409,8 @@ class PresentationView {
     }
     this.context.showNotice(notes.length > 0 ? notes.join(' ') : null);
   }
+}
+
+function limitedNote(): HTMLElement {
+  return element('span', { className: 'pptx-thumb-note', text: 'Too large to preview' });
 }

@@ -61,6 +61,7 @@ export class Deck {
   private readonly presentationRels: Relationships;
   private readonly masters = new Map<string, Promise<MasterInfo>>();
   private readonly layouts = new Map<string, Promise<LayoutInfo>>();
+  private readonly derived = new Map<string, Promise<unknown>>();
   private tableStylesRoot?: Promise<Element | undefined>;
 
   private constructor(pkg: PptxPackage, presentation: Element, rels: Relationships) {
@@ -102,6 +103,23 @@ export class Deck {
       return rel && this.pkg.has(rel.target) ? this.pkg.xml(rel.target, true) : undefined;
     })();
     return this.tableStylesRoot;
+  }
+
+  /**
+   * Something derived from a part (a chart's type, a SmartArt drawing), worked out once per presentation however
+   * many frames, slides and thumbnails need it.
+   */
+  once<T>(key: string, load: () => Promise<T>): Promise<T> {
+    let value = this.derived.get(key) as Promise<T> | undefined;
+    if (!value) {
+      value = load();
+      this.derived.set(key, value);
+    }
+    return value;
+  }
+
+  known(key: string): boolean {
+    return this.derived.has(key);
   }
 
   /** Whether a slide is hidden in slide shows (show="0"), read from its root tag without parsing the slide. */

@@ -203,8 +203,12 @@ test('sample.pptx: follows the window size until the user zooms', async ({ page 
   await expect.poll(() => slideZoom(page)).toBeLessThan(fitted - 0.05);
   await page.locator('#zoom-in').click();
   const zoomed = await page.locator('#zoom-value').textContent();
+  const narrow = (await page.locator('#pptx-stage').boundingBox())?.width ?? 0;
   await page.setViewportSize({ width: 1400, height: 900 });
-  await page.waitForTimeout(200);
+  // The stage has grown, and the resize has been handled: its observer runs before the next frame and the viewer
+  // refits in the frame after.
+  await expect.poll(async () => (await page.locator('#pptx-stage').boundingBox())?.width ?? 0).toBeGreaterThan(narrow + 300);
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   await expect(page.locator('#zoom-value')).toHaveText(zoomed ?? '');
   await page.locator('#fit-width').click();
   await expect.poll(() => slideZoom(page)).toBeCloseTo(fitted, 2);

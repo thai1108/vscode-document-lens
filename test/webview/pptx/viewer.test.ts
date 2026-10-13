@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict';
 import { afterEach, describe, it } from 'node:test';
 import type { HostMessage } from '../../../src/protocol.ts';
+import { PPTX_LIMITS } from '../../../src/webview/pptx/limits.ts';
 import { createPptxViewer } from '../../../src/webview/pptx/viewer.ts';
 import { sampleDeck } from '../../fixtures/pptx.ts';
 import { buildPptx, paragraph, run, shape } from '../../support/pptxBuilder.ts';
@@ -29,6 +30,29 @@ class VisibleObserver {
   }
   unobserve() {}
   disconnect() {}
+}
+
+type ObserverCallback = (entries: { target: Element; isIntersecting: boolean }[]) => void;
+
+/** An IntersectionObserver the test drives: report() says which thumbnails enter or leave its area. */
+class ManualObserver {
+  static readonly created: ManualObserver[] = [];
+  readonly margin: string | undefined;
+  private readonly callback: ObserverCallback;
+  private readonly targets: Element[] = [];
+  constructor(callback: ObserverCallback, options: { rootMargin?: string } = {}) {
+    this.callback = callback;
+    this.margin = options.rootMargin;
+    ManualObserver.created.push(this);
+  }
+  observe(target: Element) {
+    this.targets.push(target);
+  }
+  unobserve() {}
+  disconnect() {}
+  report(indices: number[], isIntersecting: boolean) {
+    this.callback(this.targets.filter((target) => indices.includes(Number(target.getAttribute('data-index')))).map((target) => ({ target, isIntersecting })));
+  }
 }
 
 async function open(data: Uint8Array, options: Parameters<typeof bootShell>[1] = {}): Promise<FakeHost> {
@@ -154,6 +178,32 @@ describe('presentation viewer', () => {
     assert.equal(thumbs[3]?.getAttribute('aria-label'), 'Slide 4 (hidden)');
     assert.equal(thumbs[0]?.querySelector('.pptx-thumb-frame')?.hasAttribute('inert'), true, 'thumbnail links cannot be followed');
     assert.equal(host.window.document.querySelectorAll('[id="pptx-current-slide"]').length, 1);
+  });
+
+  it('releases thumbnails far out of view and keeps none for slides that hit a limit', async () => {
+    (globalThis as { IntersectionObserver?: unknown }).IntersectionObserver = ManualObserver;
+    // Slide 2 of the sample has more shapes than this; the others fit.
+    PPTX_LIMITS.maxShapesPerSlide = 6;
+    try {
+      host = await open(sampleDeck());
+      const [draw, keep] = ManualObserver.created.slice(-2);
+      assert.ok(draw && keep);
+      assert.deepEqual([draw.margin, keep.margin], ['300px', '1500px']);
+      const frames = () => [...(host?.window.document.querySelectorAll('.pptx-thumb-frame') ?? [])];
+      draw.report([0, 1, 2, 3], true);
+      await host.until(() => frames().every((frame) => frame.childElementCount > 0), 'thumbnails');
+      assert.deepEqual(frames().map((frame) => (frame.querySelector('.pptx-slide') ? 'slide' : frame.textContent)), ['slide', 'Too large to preview', 'slide', 'slide']);
+
+      keep.report([2], false);
+      assert.equal(frames()[2]?.childElementCount, 0, 'released');
+      draw.report([2], true);
+      await host.until(() => frames()[2]?.querySelector('.pptx-slide') !== null, 'drawn again');
+
+      host.key('ArrowRight');
+      await host.until(() => host?.$('#notice').textContent === 'Some content on this slide could not be shown.', 'notice');
+    } finally {
+      PPTX_LIMITS.maxShapesPerSlide = 5_000;
+    }
   });
 
   it('reports a file that is not a presentation in the error banner', async () => {

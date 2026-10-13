@@ -7,6 +7,7 @@ import { readDocument } from '../../src/documentProvider.ts';
 import { FORMATS } from '../../src/formats/index.ts';
 import { sampleDeck } from '../fixtures/pptx.ts';
 import { ooxmlPackage } from '../support/ooxml.ts';
+import { buildPptx } from '../support/pptxBuilder.ts';
 
 // Mocha's TDD globals, provided by @vscode/test-cli inside the extension host.
 declare function suite(name: string, body: () => void): void;
@@ -64,12 +65,27 @@ suite('Document Lens: .pptx', () => {
   });
 
   test('opens in the presentation editor and stays open when the file changes on disk', async () => {
+    assert.ok(pptx);
     const uri = workspaceUri('live.pptx');
     await vscode.workspace.fs.writeFile(uri, sampleDeck());
     await vscode.commands.executeCommand('vscode.open', uri);
     await waitFor(() => presentationTab(uri), 'the presentation editor');
-    await vscode.workspace.fs.writeFile(uri, sampleDeck());
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-    assert.ok(presentationTab(uri), 'still showing the presentation editor after a reload');
+
+    // The editor reloads on the file system watcher's change event; the webview's redraw itself is covered by the
+    // happy-dom and Playwright suites, as extension host APIs cannot look into a webview.
+    const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(vscode.Uri.joinPath(uri, '..'), 'live.pptx'));
+    try {
+      let seen = false;
+      watcher.onDidChange(() => (seen = true));
+      watcher.onDidCreate(() => (seen = true));
+      const changed = buildPptx({ slides: [{ layout: 2, shapes: '' }] });
+      await vscode.workspace.fs.writeFile(uri, changed);
+      await waitFor(() => (seen ? true : undefined), 'the change event the editor reloads on');
+      const reloaded = await readDocument(uri, pptx);
+      assert.equal(reloaded.byteLength, changed.byteLength, 'the editor’s reload reads the new version and it passes the checks');
+    } finally {
+      watcher.dispose();
+    }
+    assert.ok(presentationTab(uri), 'still showing the presentation editor after the change');
   });
 });

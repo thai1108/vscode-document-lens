@@ -2,7 +2,8 @@
 // never style attributes, which the webview's CSP refuses).
 import { colorIn, toCss, toHex, transformColor, type ColorContext, type Rgba } from './color.ts';
 import type { Picture } from './media.ts';
-import { relationshipTarget, type RenderContext } from './renderContext.ts';
+import { PPTX_LIMITS } from './limits.ts';
+import { relationshipTarget, spend, type RenderBudget, type RenderContext } from './renderContext.ts';
 import type { Theme } from './theme.ts';
 import { EMU_PER_PX } from './units.ts';
 import { attr, child, children, find, kids, num, relAttr } from './xml.ts';
@@ -104,6 +105,7 @@ export async function readFill(fill: Element | undefined, colors: ColorContext, 
 
 function readGradient(fill: Element, colors: ColorContext): Paint {
   const stops = children(child(fill, 'gsLst'), 'gs')
+    .slice(0, PPTX_LIMITS.maxGradientStops)
     .map((gs) => ({ offset: Math.max(0, Math.min(1, (num(gs, 'pos') ?? 0) / 100000)), color: colorIn(gs, colors) }))
     .filter((stop): stop is GradientStop => stop.color !== undefined)
     .sort((a, b) => a.offset - b.offset);
@@ -221,10 +223,25 @@ export function modifyPaint(paint: Paint, mode: string): Paint {
 }
 
 /**
- * Sets `fill` or `stroke` (and its opacity) on an SVG element for `paint` over a box of `box` px, adding gradient,
- * pattern or picture definitions to `defs`.
+ * Where one SVG's paint definitions go. Every path of a shape draws through the same target, so a gradient, pattern,
+ * picture or arrowhead is defined once per shape however many paths use it, and its elements count against the
+ * slide's budget.
  */
-export function applyPaint(target: SVGElement, property: 'fill' | 'stroke', paint: Paint | undefined, defs: SVGDefsElement, box: Box): void {
+export interface PaintTarget {
+  readonly defs: SVGDefsElement;
+  /** The box gradients and pictures span, in CSS pixels. */
+  readonly box: Box;
+  readonly budget: RenderBudget;
+  readonly servers: Map<Paint, string>;
+  readonly markers: Map<string, string>;
+}
+
+export function paintTarget(defs: SVGDefsElement, box: Box, budget: RenderBudget): PaintTarget {
+  return { defs, box, budget, servers: new Map(), markers: new Map() };
+}
+
+/** Sets `fill` or `stroke` (and its opacity) on an SVG element, defining gradients, patterns and pictures once. */
+export function applyPaint(target: SVGElement, property: 'fill' | 'stroke', paint: Paint | undefined, into: PaintTarget): void {
   if (!paint || paint.kind === 'none') {
     target.setAttribute(property, 'none');
     return;
@@ -236,8 +253,17 @@ export function applyPaint(target: SVGElement, property: 'fill' | 'stroke', pain
     }
     return;
   }
-  const id = uniqueId(paint.kind);
-  defs.append(paintServer(id, paint, box));
+  let id = into.servers.get(paint);
+  if (!id) {
+    const cost = paint.kind === 'gradient' ? paint.stops.length + 1 : 3;
+    if (!spend(into.budget, cost)) {
+      target.setAttribute(property, 'none');
+      return;
+    }
+    id = uniqueId(paint.kind);
+    into.defs.append(paintServer(id, paint, into.box));
+    into.servers.set(paint, id);
+  }
   target.setAttribute(property, `url(#${id})`);
 }
 
@@ -479,19 +505,16 @@ const COMPOUND_BANDS: Readonly<Record<string, readonly number[]>> = {
 /** Each line of a compound outline stays at least this wide (px), as PowerPoint keeps them visible. */
 const MIN_COMPOUND_BAND = 0.75;
 
-export function applyLine(target: SVGElement, line: LineStyle | undefined, defs: SVGDefsElement, box: Box, open: boolean): void {
+export function applyLine(target: SVGElement, line: LineStyle | undefined, into: PaintTarget, open: boolean): void {
   if (!line || line.paint.kind === 'none' || line.width <= 0) {
     target.setAttribute('stroke', 'none');
     return;
   }
-  applyPaint(target, 'stroke', line.paint, defs, box);
+  applyPaint(target, 'stroke', line.paint, into);
   const bands = line.compound ? COMPOUND_BANDS[line.compound] : undefined;
   const path = target.getAttribute('d');
-  if (bands && path) {
-    target.setAttribute('stroke-width', String(round(compoundMask(target, path, bands, line.width, defs, box))));
-  } else {
-    target.setAttribute('stroke-width', String(round(line.width)));
-  }
+  const compoundWidth = bands && path ? compoundMask(target, path, bands, line.width, into) : undefined;
+  target.setAttribute('stroke-width', String(round(compoundWidth ?? line.width)));
   target.setAttribute('stroke-linecap', line.cap);
   target.setAttribute('stroke-linejoin', line.join);
   if (line.dash) {
@@ -499,17 +522,29 @@ export function applyLine(target: SVGElement, line: LineStyle | undefined, defs:
   }
   if (open) {
     const color = line.paint.kind === 'solid' ? line.paint.color : line.paint.kind === 'gradient' ? (line.paint.stops[0]?.color ?? BLACK) : BLACK;
-    if (line.head) {
-      target.setAttribute('marker-start', `url(#${lineEndMarker(defs, line.head, color, line.width, true)})`);
-    }
-    if (line.tail) {
-      target.setAttribute('marker-end', `url(#${lineEndMarker(defs, line.tail, color, line.width, false)})`);
+    for (const [end, attribute, start] of [
+      [line.head, 'marker-start', true],
+      [line.tail, 'marker-end', false],
+    ] as const) {
+      const id = end && lineEndMarker(into, end, color, line.width, start);
+      if (id) {
+        target.setAttribute(attribute, `url(#${id})`);
+      }
     }
   }
 }
 
-/** Masks the gaps out of a stroke as wide as the whole compound line; returns that width. */
-function compoundMask(target: SVGElement, path: string, bands: readonly number[], width: number, defs: SVGDefsElement, box: Box): number {
+/**
+ * Masks the gaps out of a stroke as wide as the whole compound line and returns that width; undefined (a plain
+ * stroke) when the slide's budget cannot take the mask's copies of the path.
+ */
+function compoundMask(target: SVGElement, path: string, bands: readonly number[], width: number, into: PaintTarget): number | undefined {
+  const copies = Math.floor(bands.length / 2);
+  // Roughly one element per path command in each copy of the path.
+  if (!spend(into.budget, 2 + copies * Math.ceil(path.length / 16))) {
+    return undefined;
+  }
+  const { box, defs } = into;
   const units = bands.reduce((sum, band) => sum + band, 0);
   const unit = Math.max(width / units, MIN_COMPOUND_BAND);
   const id = uniqueId('compound');
@@ -532,8 +567,18 @@ function compoundMask(target: SVGElement, path: string, bands: readonly number[]
 const BLACK: Rgba = { r: 0, g: 0, b: 0, a: 1 };
 const END_SIZES: Readonly<Record<string, number>> = { sm: 2, med: 3, lg: 5 };
 
-function lineEndMarker(defs: SVGDefsElement, end: LineEnd, color: Rgba, lineWidth: number, start: boolean): string {
+/** An arrowhead marker, defined once per target for each look; undefined when the slide's budget is spent. */
+function lineEndMarker(into: PaintTarget, end: LineEnd, color: Rgba, lineWidth: number, start: boolean): string | undefined {
+  const key = [end.type, end.width, end.length, start, toCss(color), round(lineWidth)].join('|');
+  const known = into.markers.get(key);
+  if (known) {
+    return known;
+  }
+  if (!spend(into.budget, 2)) {
+    return undefined;
+  }
   const id = uniqueId('arrow');
+  into.markers.set(key, id);
   // Arrowheads scale with the line, but stay visible on hairlines.
   const base = Math.max(lineWidth, 1.5);
   const width = (END_SIZES[end.width] ?? 3) * base;
@@ -568,7 +613,7 @@ function lineEndMarker(defs: SVGDefsElement, end: LineEnd, color: Rgba, lineWidt
     default:
       marker.append(svg('path', { d: 'M0 0L10 5L0 10Z', fill, 'fill-opacity': opacity }));
   }
-  defs.append(marker);
+  into.defs.append(marker);
   return id;
 }
 

@@ -38,6 +38,8 @@ export interface BuiltPath {
   readonly d: string;
   readonly fill: FillMode;
   readonly stroke: boolean;
+  /** Commands in the path (at least 1), what drawing it costs against the slide's element budget. */
+  readonly segments: number;
 }
 
 export interface Rect {
@@ -170,11 +172,27 @@ export function formulasOf(list: Element | undefined): Formula[] {
     });
 }
 
+// Placeholders inherit their layout's geometry element, so the same custGeom is often read for many shapes.
+const customCache = new WeakMap<Element, GeometryDef>();
+
 export function customGeometry(custGeom: Element): GeometryDef {
+  let def = customCache.get(custGeom);
+  if (!def) {
+    def = readCustomGeometry(custGeom);
+    customCache.set(custGeom, def);
+  }
+  return def;
+}
+
+function readCustomGeometry(custGeom: Element): GeometryDef {
   const rect = child(custGeom, 'rect');
   let budget = PPTX_LIMITS.maxPathCommands;
   const paths: PathDef[] = [];
   for (const path of children(child(custGeom, 'pathLst'), 'path')) {
+    // Each path costs a command too, so a list of empty paths cannot grow without bound.
+    if (budget-- <= 0) {
+      break;
+    }
     const commands: PathCommand[] = [];
     for (const node of kids(path)) {
       if (budget-- <= 0) {
@@ -354,7 +372,7 @@ export function buildGeometry(def: GeometryDef, w: number, h: number, overrides:
   const paths = def.paths.map((path) => {
     const sx = path.w ? widthPx / path.w : 1 / EMU_PER_PX;
     const sy = path.h ? heightPx / path.h : 1 / EMU_PER_PX;
-    return { d: pathData(path.commands, value, sx, sy), fill: path.fill, stroke: path.stroke };
+    return { d: pathData(path.commands, value, sx, sy), fill: path.fill, stroke: path.stroke, segments: Math.max(1, path.commands.length) };
   });
   const [l = 'l', t = 't', r = 'r', b = 'b'] = def.textRect ?? [];
   const x = value(l) / EMU_PER_PX;

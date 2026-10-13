@@ -119,7 +119,8 @@ export function renderParagraphs(txBody: Element, options: ParagraphOptions): HT
   const counters = new Map<number, { scheme: string; value: number }>();
   const result: HTMLElement[] = [];
   for (const paragraph of children(txBody, 'p')) {
-    if (options.context.budget.runs <= 0) {
+    // Every paragraph counts, so thousands of empty ones cannot slip past the cap.
+    if (options.context.budget.runs-- <= 0) {
       options.context.budget.truncated = true;
       break;
     }
