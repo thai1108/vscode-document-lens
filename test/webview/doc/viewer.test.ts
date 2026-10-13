@@ -30,11 +30,12 @@ describe('.doc viewer', () => {
     assert.equal(host.$('#error').hidden, true);
     assert.equal(host.$('#notice').hidden, false);
     assert.equal(host.$('#notice').textContent, 'Simplified preview: only the text of this document is shown; formatting, pictures and page layout are left out.');
-    assert.deepEqual(texts('#doc-paper > .doc-p').slice(0, 4), [
+    assert.deepEqual(texts('#doc-paper > .doc-p').slice(0, 5), [
       'Document Lens sample',
       'This synthetic Word 97–2003 document has paragraphs, a table, a field and a footnote1.',
       'Prices: 5 € – “quoted” text.',
       'Visit the example site for more.',
+      'Tracked changes: only the kept text shows.',
     ]);
     assert.ok(texts('#doc-paper > .doc-p').includes('日本語のテキストも表示されます。'));
     assert.deepEqual(texts('.doc-note-ref'), ['1', '1']);

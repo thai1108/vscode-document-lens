@@ -16,7 +16,10 @@ interface FakeStory {
  * A WordDocument made of stories. Unless `properties` is false or `overrides` says otherwise, '\r' ends a plain
  * paragraph, '\x07' a cell, and '\x07' right after another '\x07' a row (true of these fixtures, not of Word in general).
  */
-function fake(stories: FakeStory[], options: { properties?: boolean; footnoteRefs?: number[]; endnoteRefs?: number[]; overrides?: Map<number, ParagraphProperties> } = {}): WordDocument {
+function fake(
+  stories: FakeStory[],
+  options: { properties?: boolean; footnoteRefs?: number[]; endnoteRefs?: number[]; overrides?: Map<number, ParagraphProperties>; hidden?: [number, number][] } = {},
+): WordDocument {
   const text = stories.map((story) => story.text).join('');
   let start = 0;
   const ranges = stories.map((story) => {
@@ -30,6 +33,7 @@ function fake(stories: FakeStory[], options: { properties?: boolean; footnoteRef
     stories: ranges,
     footnoteRefs: options.footnoteRefs ?? [],
     endnoteRefs: options.endnoteRefs ?? [],
+    hidden: options.hidden ?? [],
     paragraphAt(cp) {
       if (options.properties === false) {
         return undefined;
@@ -112,6 +116,28 @@ describe('layoutDocument', () => {
     const deep = '\x13'.repeat(100) + 'x' + '\x15'.repeat(100);
     const layout = layoutDocument(fake([{ kind: 'main', text: `${deep}after\r` }]), { ...LAYOUT_LIMITS, maxFieldDepth: 8 });
     assert.deepEqual(show(layout.stories[0]?.blocks ?? []), ['after']);
+  });
+
+  it('leaves out tracked deletions and hidden text, across paragraph marks and stories', () => {
+    const text = 'Keep this not that. Joined\rparagraph.\r';
+    const hidden: [number, number][] = [
+      [text.indexOf(' not that'), text.indexOf('.')],
+      [text.indexOf('\rparagraph'), text.indexOf('paragraph')],
+    ];
+    assert.deepEqual(mainBlocks(text, { hidden }), ['Keep this. Joinedparagraph.']);
+    const layout = layoutDocument(
+      fake(
+        [
+          { kind: 'main', text: 'Body\r' },
+          { kind: 'footnotes', text: '\x02Gone\r\x02Kept\r' },
+        ],
+        { hidden: [[3, 11]] },
+      ),
+    );
+    assert.deepEqual(
+      layout.stories.map((story) => show(story.blocks)),
+      [['Bod'], ['^1Kept']],
+    );
   });
 
   it('builds tables from cell and row marks, with multi-paragraph cells', () => {

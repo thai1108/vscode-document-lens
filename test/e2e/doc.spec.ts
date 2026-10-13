@@ -35,6 +35,8 @@ test('sample.doc: text, Japanese, table, link, footnote and page break on white 
     await expect(paper.getByText('Document Lens sample', { exact: true })).toBeVisible();
     await expect(paper.getByText('日本語のテキストも表示されます。')).toBeVisible();
     await expect(paper.getByText('Prices: 5 € – “quoted” text.')).toBeVisible();
+    await expect(paper.getByText('Tracked changes: only the kept text shows.')).toBeVisible();
+    await expect(paper).not.toContainText('removed words');
     await expect(page.locator('.doc-table tr')).toHaveCount(3);
     await expect(page.locator('.doc-table tr').nth(2).locator('td')).toHaveText(['Pears', '5', 'Twoparagraphs']);
     await expect(page.locator('.doc-page-break')).toBeVisible();

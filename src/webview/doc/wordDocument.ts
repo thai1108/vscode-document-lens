@@ -1,6 +1,7 @@
 // The text of a Word 97–2003 binary document ([MS-DOC]): the File Information Block (FIB) at the start of the
 // WordDocument stream says which table stream holds the piece table (CLX), and the pieces map character positions (CPs)
-// to cp1252 or UTF-16LE text in the WordDocument stream. Paragraph properties are read only as far as tables need them.
+// to cp1252 or UTF-16LE text in the WordDocument stream. Paragraph properties are read only as far as tables need them,
+// character properties only to leave out tracked deletions and hidden text.
 import { CompoundFile } from './compoundFile.ts';
 
 export const DOC_LIMITS = {
@@ -8,6 +9,8 @@ export const DOC_LIMITS = {
   maxPieces: 1_000_000,
   /** Characters decoded across all stories; the rest of a longer document is cut with a notice. */
   maxCharacters: 3_000_000,
+  /** Runs of deleted or hidden text left out; further ones are shown. */
+  maxHiddenRuns: 100_000,
 };
 
 const WORD_97_IDENT = 0xa5ec;
@@ -21,6 +24,7 @@ const ENCRYPTED = 'This .doc file is password-protected; Document Lens cannot op
 
 // Indexes of fc/lcb pairs in FibRgFcLcb97.
 const PAIR_FOOTNOTE_REFS = 2;
+const PAIR_CHPX_BIN_TABLE = 12;
 const PAIR_PAPX_BIN_TABLE = 13;
 const PAIR_CLX = 33;
 const PAIR_ENDNOTE_REFS = 46;
@@ -32,6 +36,9 @@ const SPRM_INNER_ROW_END = 0x244c;
 const SPRM_TABLE_DEPTH = 0x6649;
 const SPRM_DEF_TABLE = 0xd608;
 const SPRM_CHANGE_TABS = 0xc615;
+// Character sprms of text Word does not show: a tracked deletion, and hidden text.
+const SPRM_DELETED = 0x0800;
+const SPRM_HIDDEN = 0x083c;
 
 function corrupt(detail: string): Error {
   return new Error(`Corrupt .doc file: ${detail}`);
@@ -72,9 +79,11 @@ export interface WordDocument {
   endnoteRefs: readonly number[];
   /** Properties of the paragraph whose mark is at `cp`; undefined when the file has no usable paragraph table. */
   paragraphAt(cp: number): ParagraphProperties | undefined;
+  /** Sorted, disjoint CP ranges [start, end) of tracked deletions and hidden text. */
+  hidden: readonly (readonly [number, number])[];
 }
 
-// Story lengths in FibRgLw97, in CP order; index 7 (ccpMcr) is unused and always 0.
+// Story lengths in FibRgLw97, in CP order; index 6 (ccpMcr) is unused and always 0.
 const STORY_LENGTHS: readonly [number, StoryKind | undefined][] = [
   [3, 'main'],
   [4, 'footnotes'],
@@ -110,6 +119,7 @@ export function readWordDocument(bytes: Uint8Array, limits = DOC_LIMITS): WordDo
   const decoded = Math.min(wanted, limits.maxCharacters);
   const text = decodeText(word, pieces, decoded);
   const papx = new ParagraphTable(word, pieces, optionalFcLcb(table, fib.pairs, PAIR_PAPX_BIN_TABLE));
+  const hidden = hiddenRanges(word, pieces, optionalFcLcb(table, fib.pairs, PAIR_CHPX_BIN_TABLE), limits.maxHiddenRuns);
 
   return {
     text,
@@ -118,6 +128,7 @@ export function readWordDocument(bytes: Uint8Array, limits = DOC_LIMITS): WordDo
     footnoteRefs: noteRefs(optionalFcLcb(table, fib.pairs, PAIR_FOOTNOTE_REFS)),
     endnoteRefs: noteRefs(optionalFcLcb(table, fib.pairs, PAIR_ENDNOTE_REFS)),
     paragraphAt: (cp) => papx.at(cp),
+    hidden,
   };
 }
 
@@ -285,6 +296,95 @@ function noteRefs(plc: Uint8Array | undefined): number[] {
   return refs;
 }
 
+/** A bin table (PlcBteChpx / PlcBtePapx): n + 1 stream offsets, then the FKP page number of each of the n ranges. */
+function readBinTable(plc: Uint8Array | undefined): { boundaries: Uint32Array; pages: Uint32Array } {
+  const count = plc && plc.byteLength >= 12 && (plc.byteLength - 4) % 8 === 0 ? (plc.byteLength - 4) / 8 : 0;
+  const boundaries = new Uint32Array(count + 1);
+  const pages = new Uint32Array(count);
+  if (plc && count > 0) {
+    const view = new DataView(plc.buffer, plc.byteOffset, plc.byteLength);
+    for (let i = 0; i <= count; i++) {
+      boundaries[i] = view.getUint32(i * 4, true);
+    }
+    for (let i = 0; i < count; i++) {
+      pages[i] = view.getUint32((count + 1) * 4 + i * 4, true) & 0x3fffff;
+    }
+  }
+  return { boundaries, pages };
+}
+
+/** The 512-byte FKP page `pn` of the WordDocument stream, or undefined if it lies outside. */
+function fkpPage(word: Uint8Array, pn: number): Uint8Array | undefined {
+  const start = pn * FKP_SIZE;
+  return start + FKP_SIZE <= word.byteLength ? word.subarray(start, start + FKP_SIZE) : undefined;
+}
+
+/**
+ * CP ranges of tracked deletions and hidden text, from the CHPX FKP pages: each page maps byte ranges of the
+ * WordDocument stream to character property lists, and the pieces map those bytes back to CPs.
+ */
+function hiddenRanges(word: Uint8Array, pieces: Piece[], plc: Uint8Array | undefined, maxRuns: number): [number, number][] {
+  const runs: [number, number][] = [];
+  for (const pn of new Set(readBinTable(plc).pages)) {
+    const page = fkpPage(word, pn);
+    const crun = page?.[FKP_SIZE - 1] ?? 0;
+    if (!page || (crun + 1) * 4 + crun > FKP_SIZE - 1) {
+      continue;
+    }
+    const view = new DataView(page.buffer, page.byteOffset, FKP_SIZE);
+    for (let i = 0; i < crun && runs.length < maxRuns; i++) {
+      const offset = (page[(crun + 1) * 4 + i] ?? 0) * 2;
+      // A Chpx is cb, then cb bytes of sprms.
+      if (offset > 0 && isHiddenText(page, offset + 1, offset + 1 + (page[offset] ?? 0))) {
+        runs.push([view.getUint32(i * 4, true), view.getUint32(i * 4 + 4, true)]);
+      }
+    }
+  }
+  const bytes = mergeRanges(runs);
+  const ranges: [number, number][] = [];
+  for (const piece of pieces) {
+    const size = piece.compressed ? 1 : 2;
+    const end = piece.offset + (piece.cpEnd - piece.cpStart) * size;
+    for (let i = Math.max(0, lastAtOrBefore(bytes.length, (j) => bytes[j]?.[0] ?? 0, piece.offset)); i < bytes.length; i++) {
+      const [from, to] = bytes[i] ?? [0, 0];
+      if (from >= end) {
+        break;
+      }
+      const start = Math.max(from, piece.offset);
+      const stop = Math.min(to, end);
+      if (stop > start) {
+        ranges.push([piece.cpStart + Math.floor((start - piece.offset) / size), piece.cpStart + Math.ceil((stop - piece.offset) / size)]);
+      }
+    }
+  }
+  return mergeRanges(ranges);
+}
+
+function isHiddenText(page: Uint8Array, start: number, end: number): boolean {
+  let hidden = false;
+  forEachSprm(page, start, Math.min(end, FKP_SIZE), (sprm, operand) => {
+    // Toggle operands: 0 off, 1 on, 0x80 as in the style, 0x81 the opposite of the style (whose value is not read).
+    if (sprm === SPRM_DELETED || sprm === SPRM_HIDDEN) {
+      hidden = operand === 1 || operand === 0x81;
+    }
+  });
+  return hidden;
+}
+
+/** Sorts ranges and joins overlapping or touching ones. */
+function mergeRanges(ranges: [number, number][]): [number, number][] {
+  const merged: [number, number][] = [];
+  for (const [start, end] of ranges.filter(([start, end]) => end > start).sort((a, b) => a[0] - b[0])) {
+    const last = merged.at(-1);
+    if (last && start <= last[1]) {
+      last[1] = Math.max(last[1], end);
+    } else {
+      merged.push([start, end]);
+    }
+  }
+  return merged;
+}
+
 /**
  * Paragraph properties from the PAPX bin table (PlcBtePapx): its entries point at 512-byte FKP pages in the
  * WordDocument stream, which map stream offsets of paragraph marks to property lists. Pages are parsed on first use.
@@ -299,18 +399,9 @@ class ParagraphTable {
   constructor(word: Uint8Array, pieces: Piece[], plc: Uint8Array | undefined) {
     this.word = word;
     this.pieces = pieces;
-    const count = plc && plc.byteLength >= 12 && (plc.byteLength - 4) % 8 === 0 ? (plc.byteLength - 4) / 8 : 0;
-    this.boundaries = new Uint32Array(count + 1);
-    this.pages = new Uint32Array(count);
-    if (plc && count > 0) {
-      const view = new DataView(plc.buffer, plc.byteOffset, plc.byteLength);
-      for (let i = 0; i <= count; i++) {
-        this.boundaries[i] = view.getUint32(i * 4, true);
-      }
-      for (let i = 0; i < count; i++) {
-        this.pages[i] = view.getUint32((count + 1) * 4 + i * 4, true) & 0x3fffff;
-      }
-    }
+    const table = readBinTable(plc);
+    this.boundaries = table.boundaries;
+    this.pages = table.pages;
   }
 
   at(cp: number): ParagraphProperties | undefined {
@@ -349,11 +440,10 @@ class FkpPage {
   }
 
   static parse(word: Uint8Array, pn: number): FkpPage | null {
-    const start = pn * FKP_SIZE;
-    if (start + FKP_SIZE > word.byteLength) {
+    const page = fkpPage(word, pn);
+    if (!page) {
       return null;
     }
-    const page = word.subarray(start, start + FKP_SIZE);
     const view = new DataView(page.buffer, page.byteOffset, FKP_SIZE);
     const crun = page[FKP_SIZE - 1] ?? 0;
     if (crun === 0 || (crun + 1) * 4 + crun * 13 > FKP_SIZE - 1) {
@@ -382,17 +472,9 @@ function papxProperties(page: Uint8Array, offset: number): ParagraphProperties {
   const cb = page[offset] ?? 0;
   const start = cb === 0 ? offset + 2 : offset + 1;
   const size = cb === 0 ? (page[offset + 1] ?? 0) * 2 : cb * 2 - 1;
-  const end = Math.min(start + size, FKP_SIZE);
   const result = { ...DEFAULT_PARAGRAPH };
   // Skip the 2-byte style index, then walk the sprms.
-  for (let at = start + 2; at + 2 <= end; ) {
-    const sprm = (page[at] ?? 0) | ((page[at + 1] ?? 0) << 8);
-    at += 2;
-    const size = operandSize(sprm, page, at);
-    if (at + size > end) {
-      break;
-    }
-    const operand = page[at] ?? 0;
+  forEachSprm(page, start + 2, Math.min(start + size, FKP_SIZE), (sprm, operand) => {
     if (sprm === SPRM_IN_TABLE) {
       result.inTable = operand !== 0;
     } else if (sprm === SPRM_ROW_END) {
@@ -402,9 +484,22 @@ function papxProperties(page: Uint8Array, offset: number): ParagraphProperties {
     } else if (sprm === SPRM_TABLE_DEPTH) {
       result.inTable ||= operand > 0;
     }
+  });
+  return result;
+}
+
+/** Calls `visit` with each sprm of a property list in bytes[start, end) and the first byte of its operand. */
+function forEachSprm(bytes: Uint8Array, start: number, end: number, visit: (sprm: number, operand: number) => void): void {
+  for (let at = start; at + 2 <= end; ) {
+    const sprm = (bytes[at] ?? 0) | ((bytes[at + 1] ?? 0) << 8);
+    at += 2;
+    const size = operandSize(sprm, bytes, at);
+    if (at + size > end) {
+      return;
+    }
+    visit(sprm, bytes[at] ?? 0);
     at += size;
   }
-  return result;
 }
 
 /** Operand size of a sprm from its spra bits ([MS-DOC] 2.2.5.1), including the two variable-length exceptions. */

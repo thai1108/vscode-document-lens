@@ -1,6 +1,7 @@
 // Turns the character stream of each story into blocks to render: paragraphs (split on paragraph marks), page breaks,
 // and tables (cells end with 0x07; the paragraph table says which 0x07 ends a row). Fields show only their result,
-// HYPERLINK fields become links, note references become numbers, and other control characters are dropped.
+// HYPERLINK fields become links, note references become numbers, and tracked deletions, hidden text and other control
+// characters are dropped.
 import { externalUrl } from '../../protocol.ts';
 import type { ParagraphProperties, StoryKind, WordDocument } from './wordDocument.ts';
 
@@ -122,8 +123,15 @@ class StoryBuilder {
 
   /** Lays out CPs start..end; false when the paragraph budget ran out first. */
   read(start: number, end: number): boolean {
-    const text = this.document.text;
+    const { text, hidden } = this.document;
+    let next = hidden.findIndex(([, stop]) => stop > start);
     for (let cp = start; cp < end; cp++) {
+      const range = hidden[next];
+      if (range && range[0] <= cp) {
+        cp = range[1] - 1;
+        next++;
+        continue;
+      }
       const code = text.charCodeAt(cp);
       if (code === FIELD_BEGIN || code === FIELD_SEPARATOR || code === FIELD_END) {
         this.field(code);

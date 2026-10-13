@@ -1,10 +1,11 @@
 // Minimal Word 97–2003 (.doc) writer for synthetic test documents ([MS-DOC]): a FIB, the text as one piece per input
 // item (cp1252 when every character fits, UTF-16LE otherwise), the piece table, paragraph properties for tables,
-// character properties marking special characters, fields, footnotes and one section, packed in a compound file.
+// character properties for special characters, tracked deletions and hidden text, fields, footnotes and one section,
+// packed in a compound file.
 import { writeCompoundFile, type CompoundFileOptions, type CompoundStream } from './compoundFileWriter.ts';
 
 /** One piece of the main text; a row becomes cells ending in 0x07 plus the row-end mark. */
-export type DocItem = string | { text: string; unicode: true } | { row: string[] };
+export type DocItem = string | { text: string; unicode?: boolean; deleted?: boolean; hidden?: boolean } | { row: string[] };
 
 export interface WordDocumentInput {
   body: DocItem[];
@@ -42,6 +43,9 @@ const PAIR_DOP = 31;
 const PAIR_CLX = 33;
 const PAIR_COUNT = 0x5d;
 const SPECIAL = new Set([0x01, 0x02, 0x08, 0x13, 0x14, 0x15]);
+const SPRM_SPECIAL = [0x55, 0x08, 0x01];
+const SPRM_DELETED = [0x00, 0x08, 0x01];
+const SPRM_HIDDEN = [0x3c, 0x08, 0x01];
 const FIELD_TYPES: Record<string, number> = { HYPERLINK: 88, PAGE: 33, DATE: 31 };
 
 const cp1252Bytes = (() => {
@@ -54,6 +58,8 @@ interface Piece {
   compressed: boolean;
   cpStart: number;
   offset: number;
+  /** Character properties of the whole piece. */
+  grpprl: number[];
 }
 
 interface ParagraphMark {
@@ -68,7 +74,7 @@ export function writeWordDocument(input: WordDocumentInput): Buffer {
   const pieces: Piece[] = [];
   const marks = new Map<number, ParagraphMark>();
   let cp = 0;
-  const addPiece = (text: string, unicode: boolean, table?: number) => {
+  const addPiece = (text: string, unicode: boolean, table?: number, grpprl: number[] = []) => {
     const compressed = !unicode && [...text].every((char) => cp1252Bytes.has(char));
     for (let i = 0; i < text.length; i++) {
       const code = text.charCodeAt(i);
@@ -77,7 +83,7 @@ export function writeWordDocument(input: WordDocumentInput): Buffer {
         marks.set(cp + i, { cp: cp + i, inTable: table !== undefined || code === 0x07, rowEnd, cells: table ?? 0 });
       }
     }
-    pieces.push({ text, compressed, cpStart: cp, offset: 0 });
+    pieces.push({ text, compressed, cpStart: cp, offset: 0, grpprl });
     cp += text.length;
   };
   for (const item of input.body) {
@@ -86,7 +92,7 @@ export function writeWordDocument(input: WordDocumentInput): Buffer {
     } else if ('row' in item) {
       addPiece(item.row.map((cell) => `${cell}\x07`).join('') + '\x07', false, item.row.length);
     } else {
-      addPiece(item.text, true);
+      addPiece(item.text, item.unicode ?? false, undefined, [...(item.deleted ? SPRM_DELETED : []), ...(item.hidden ? SPRM_HIDDEN : [])]);
     }
   }
   const ccpText = cp;
@@ -136,18 +142,18 @@ export function writeWordDocument(input: WordDocumentInput): Buffer {
   };
   const charSize = (position: number) => (pieces.findLast((candidate) => candidate.cpStart <= position)?.compressed ? 1 : 2);
 
-  // Character runs in stream order: special characters get sprmCFSpec, everything else the default properties.
-  const allText = pieces.map((piece) => piece.text).join('');
+  // Character runs in stream order: each piece's properties, plus sprmCFSpec on special characters.
   const charRuns: { end: number; grpprl: number[] }[] = [];
   for (const piece of storage) {
+    const size = piece.compressed ? 1 : 2;
     for (let i = 0; i < piece.text.length; i++) {
-      const position = piece.cpStart + i;
-      if (SPECIAL.has(allText.charCodeAt(position))) {
-        charRuns.push({ end: fcOf(position), grpprl: [] }, { end: fcOf(position) + charSize(position), grpprl: [0x55, 0x08, 0x01] });
+      if (SPECIAL.has(piece.text.charCodeAt(i))) {
+        const fc = piece.offset + i * size;
+        charRuns.push({ end: fc, grpprl: piece.grpprl }, { end: fc + size, grpprl: [...piece.grpprl, ...SPRM_SPECIAL] });
       }
     }
+    charRuns.push({ end: piece.offset + piece.text.length * size, grpprl: piece.grpprl });
   }
-  charRuns.push({ end: textEnd, grpprl: [] });
   // Every paragraph keeps its own PAPX entry: readers find paragraph ends from these boundaries.
   const paraRuns: { end: number; grpprl: number[] }[] = [...marks.values()]
     .map((mark) => ({ end: fcOf(mark.cp) + charSize(mark.cp), grpprl: paragraphSprms(mark) }))

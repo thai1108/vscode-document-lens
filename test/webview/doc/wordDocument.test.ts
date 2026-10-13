@@ -69,6 +69,35 @@ describe('readWordDocument', () => {
     assert.equal(reversed.paragraphAt(rowEnd)?.rowEnd, true);
   });
 
+  it('finds tracked deletions and hidden text in the character properties', () => {
+    const document = readWordDocument(writeWordDocument(SAMPLE_DOC));
+    const shown = (from: number, to: number) => document.text.slice(from, to);
+    assert.deepEqual(
+      document.hidden.map(([from, to]) => shown(from, to)),
+      ['removed words ', ' (hidden note)'],
+    );
+    const mixed = readWordDocument(
+      doc({ body: ['a ', { text: 'gone', deleted: true }, { text: '消えた', unicode: true, hidden: true }, { text: '残る', unicode: true }, '\r'] }),
+    );
+    assert.deepEqual(
+      mixed.hidden.map(([from, to]) => mixed.text.slice(from, to)),
+      ['gone消えた'],
+    );
+  });
+
+  it('ignores character properties that are damaged or point outside the stream', () => {
+    const PAIR_CHPX = 12;
+    const outside = doc({
+      body: ['a ', { text: 'gone', deleted: true }, '\r'],
+      edit({ word, table }) {
+        table.writeUInt32LE(0x3fffff, located(word, PAIR_CHPX).fc + 8);
+      },
+    });
+    assert.deepEqual(readWordDocument(outside).hidden, []);
+    const capped = doc({ body: ['a ', { text: 'gone', deleted: true }, ' b ', { text: 'too', hidden: true }, '\r'] });
+    assert.equal(readWordDocument(capped, { ...DOC_LIMITS, maxHiddenRuns: 1 }).hidden.length, 1);
+  });
+
   it('uses the 0Table stream when the FIB says so', () => {
     assert.equal(readWordDocument(doc({ tableStream: '0Table' })).text, 'Hello\rworld\r');
   });

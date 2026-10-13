@@ -53,6 +53,7 @@ suite('.doc preview in VS Code', () => {
     const text = paragraphs(main.blocks);
     assert.equal(text[0], 'Document Lens sample');
     assert.ok(text.includes('Prices: 5 € – “quoted” text.'));
+    assert.ok(text.includes('Tracked changes: only the kept text shows.'));
     assert.ok(text.includes('日本語のテキストも表示されます。'));
     assert.equal(main.blocks.filter((block) => block.type === 'table').length, 1);
     assert.equal(layout.truncated, false);
