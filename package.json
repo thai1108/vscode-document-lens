@@ -2,7 +2,7 @@
   "name": "document-lens",
   "displayName": "Document Lens",
   "description": "Preview .pdf, .docx, .doc, .xlsx, .xls, .pptx and .ppt files inside VS Code: pages, sheets and slides, read-only and fully offline.",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "publisher": "thai1108",
   "icon": "media/icon.png",
   "galleryBanner": {
@@ -10,6 +10,7 @@
     "theme": "dark"
   },
   "license": "MIT",
+  "pricing": "Free",
   "repository": {
     "type": "git",
     "url": "https://github.com/thai1108/vscode-document-lens.git"
